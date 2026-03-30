@@ -65,6 +65,8 @@ import {
   signInWithPopup, 
   onAuthStateChanged,
   signInWithEmailAndPassword,
+  createUserWithEmailAndPassword,
+  sendEmailVerification,
   OperationType,
   handleFirestoreError,
   User,
@@ -145,6 +147,8 @@ export default function App() {
 }
 
 function FitCityApp() {
+  const [loginMode, setLoginMode] = useState<'admin' | 'member'>('member');
+  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
   const [isLoggedIn, setIsLoggedIn] = useState(() => {
     return localStorage.getItem('fitcity_isLoggedIn') === 'true';
   });
@@ -431,20 +435,87 @@ function FitCityApp() {
     setLoginError('');
 
     try {
-      // Try to sign in with Firebase Auth
-      await signInWithEmailAndPassword(auth, email, password);
+      const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
+
+      if (!user.emailVerified) {
+        setLoginError('Please verify your email address before logging in.');
+        await auth.signOut();
+        return;
+      }
+
+      // Check role
+      const userDoc = await getDoc(doc(db, 'users', user.uid));
+      if (userDoc.exists()) {
+        const role = userDoc.data().role;
+        if (loginMode === 'admin' && role !== 'admin') {
+          setLoginError('You do not have admin access.');
+          await auth.signOut();
+          return;
+        }
+        if (loginMode === 'member' && role !== 'member') {
+          setLoginError('You do not have member access.');
+          await auth.signOut();
+          return;
+        }
+      } else {
+        setLoginError('User role not found.');
+        await auth.signOut();
+        return;
+      }
+
       setIsLoggedIn(true);
     } catch (error: any) {
       console.error("Login Error:", error);
       
-      if (error.code === 'auth/user-not-found' || error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
-        setLoginError('Invalid email or password');
-      } else if (error.code === 'auth/operation-not-allowed') {
-        setLoginError('Email/Password login is not enabled. Please enable it in the Firebase Console.');
+      if (error.code === 'auth/invalid-credential') {
+        setLoginError('Invalid email or password.');
+      } else if (error.code === 'auth/user-disabled') {
+        setLoginError('This account has been disabled.');
+      } else if (error.code === 'auth/too-many-requests') {
+        setLoginError('Too many attempts. Please try again later.');
       } else if (error.code === 'auth/unauthorized-domain') {
-        setLoginError('This domain is not authorized in Firebase. Please add it to the Authorized Domains in the Firebase Console.');
+        setLoginError('This domain is not authorized.');
       } else {
-        setLoginError(`Failed to sign in: ${error.message || 'Please try again.'}`);
+        setLoginError(`Login failed: ${error.message}`);
+      }
+    }
+  };
+
+  const handleSignUp = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const formData = new FormData(e.currentTarget);
+    const email = formData.get('email') as string;
+    const password = formData.get('password') as string;
+
+    setLoginError('');
+
+    try {
+      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
+
+      await sendEmailVerification(user);
+
+      // Create user document
+      await setDoc(doc(db, 'users', user.uid), {
+        uid: user.uid,
+        email: user.email,
+        role: loginMode, // 'admin' or 'member'
+        displayName: email.split('@')[0]
+      });
+
+      setLoginError('Account created! Please check your email for verification.');
+      await auth.signOut();
+    } catch (error: any) {
+      console.error("Sign Up Error:", error);
+      if (error.code === 'auth/email-already-in-use') {
+        setLoginError('This email is already in use. Please login instead.');
+      } else if (error.code === 'auth/weak-password') {
+        setLoginError('Password should be at least 6 characters.');
+      } else if (error.code === 'auth/invalid-email') {
+        setLoginError('Invalid email address.');
+      } else {
+        setLoginError(`Failed to sign up: ${error.message}`);
       }
     }
   };
@@ -774,10 +845,39 @@ function FitCityApp() {
               <Activity size={32} className="text-white" />
             </div>
             <h1 className="text-3xl font-bold tracking-tight">FitCity</h1>
-            <p className="text-gray-500 text-sm mt-1">Management Portal</p>
+            <p className="text-gray-500 text-sm mt-1">{loginMode === 'admin' ? 'Admin' : 'Member'} {authMode === 'login' ? 'Login' : 'Sign Up'}</p>
           </div>
 
-          <form onSubmit={handleLogin} className="space-y-6">
+          <div className="flex gap-2 mb-6">
+            <button
+              onClick={() => setLoginMode('member')}
+              className={`flex-1 py-2 rounded-xl text-sm font-bold transition-all ${loginMode === 'member' ? 'bg-brand-red text-white' : 'bg-black/5 dark:bg-white/5 text-gray-500'}`}
+            >
+              Member
+            </button>
+            <button
+              onClick={() => setLoginMode('admin')}
+              className={`flex-1 py-2 rounded-xl text-sm font-bold transition-all ${loginMode === 'admin' ? 'bg-brand-red text-white' : 'bg-black/5 dark:bg-white/5 text-gray-500'}`}
+            >
+              Admin
+            </button>
+          </div>
+          <div className="flex gap-2 mb-6">
+            <button
+              onClick={() => setAuthMode('login')}
+              className={`flex-1 py-2 rounded-xl text-sm font-bold transition-all ${authMode === 'login' ? 'bg-brand-red text-white' : 'bg-black/5 dark:bg-white/5 text-gray-500'}`}
+            >
+              Login
+            </button>
+            <button
+              onClick={() => setAuthMode('signup')}
+              className={`flex-1 py-2 rounded-xl text-sm font-bold transition-all ${authMode === 'signup' ? 'bg-brand-red text-white' : 'bg-black/5 dark:bg-white/5 text-gray-500'}`}
+            >
+              Sign Up
+            </button>
+          </div>
+
+          <form onSubmit={authMode === 'login' ? handleLogin : handleSignUp} className="space-y-6">
             <div className="space-y-2">
               <label className="text-sm font-medium text-gray-400">Email Address</label>
               <div className="relative">
