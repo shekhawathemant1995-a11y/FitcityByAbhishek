@@ -57,7 +57,7 @@ service cloud.firestore {
 
     function isValidDateString(dateStr) {
       return dateStr is string &&
-        dateStr.matches("^\\d{4}-\\d{2}-\\d{2}$");
+        (dateStr == "" || dateStr.matches("^\\d{4}-\\d{2}-\\d{2}$"));
     }
 
     function hasRequiredFields(fields) {
@@ -74,13 +74,13 @@ service cloud.firestore {
 
     function isValidMember(data) {
       let requiredFields = ['id', 'name', 'phone', 'joinDate', 'expiryDate', 'plan', 'status', 'amountPaid'];
-      let allowedFields = ['id', 'name', 'phone', 'email', 'joinDate', 'expiryDate', 'plan', 'status', 'amountPaid', 'attendance', 'uid'];
+      let allowedFields = ['id', 'name', 'phone', 'email', 'joinDate', 'expiryDate', 'plan', 'status', 'amountPaid', 'attendance', 'uid', 'photoURL'];
       
       return hasRequiredFields(requiredFields) &&
              hasOnlyAllowedFields(allowedFields) &&
              data.id is string &&
              data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
-             data.phone is string && data.phone.size() > 0 && data.phone.size() < 20 &&
+             data.phone is string && (data.phone.size() == 0 || data.phone.size() < 20) &&
              (!('email' in data) || isValidEmail(data.email)) &&
              isValidDateString(data.joinDate) &&
              isValidDateString(data.expiryDate) &&
@@ -88,18 +88,46 @@ service cloud.firestore {
              data.status in ['Active', 'Expired', 'Pending'] &&
              data.amountPaid is number && data.amountPaid >= 0 &&
              (!('attendance' in data) || data.attendance is map) &&
-             (!('uid' in data) || data.uid is string);
+             (!('uid' in data) || data.uid is string) &&
+             (!('photoURL' in data) || data.photoURL is string);
     }
 
     function isValidUser(data) {
       let requiredFields = ['uid', 'email', 'role'];
-      let allowedFields = ['uid', 'email', 'role', 'displayName', 'phone', 'location'];
+      let allowedFields = ['uid', 'email', 'role', 'displayName', 'phone', 'location', 'photoURL'];
       
       return hasRequiredFields(requiredFields) &&
              hasOnlyAllowedFields(allowedFields) &&
              data.uid is string && data.uid == request.auth.uid &&
              isValidEmail(data.email) &&
-             data.role in ['admin', 'staff'];
+             data.role in ['admin', 'staff'] &&
+             (!('photoURL' in data) || data.photoURL is string);
+    }
+
+    function isValidLog(data) {
+      let requiredFields = ['type', 'message', 'date'];
+      let allowedFields = ['id', 'type', 'message', 'date', 'adminId'];
+      
+      return hasRequiredFields(requiredFields) &&
+             hasOnlyAllowedFields(allowedFields) &&
+             data.type in ['MemberAdded', 'MemberUpdated', 'PlanUpdated', 'ProfileUpdated', 'MembershipRequested'] &&
+             data.message is string &&
+             data.date is string &&
+             (!('adminId' in data) || data.adminId is string) &&
+             (!('id' in data) || data.id is string);
+    }
+
+    function isValidAnnouncement(data) {
+      let requiredFields = ['title', 'content', 'date', 'authorId'];
+      let allowedFields = ['id', 'title', 'content', 'date', 'authorId'];
+      
+      return hasRequiredFields(requiredFields) &&
+             hasOnlyAllowedFields(allowedFields) &&
+             data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
+             data.content is string && data.content.size() > 0 && data.content.size() < 5000 &&
+             data.date is string &&
+             data.authorId is string &&
+             (!('id' in data) || data.id is string);
     }
 
     // ===============================================================
@@ -115,7 +143,7 @@ service cloud.firestore {
 
     match /members/{memberId} {
       allow read: if isAuthenticated();
-      allow create: if isAdmin() && isValidMember(request.resource.data);
+      allow create: if (isAdmin() || (isAuthenticated() && request.auth.uid == request.resource.data.uid && request.resource.data.status == 'Pending')) && isValidMember(request.resource.data);
       allow update: if (isAdmin() || (isAuthenticated() && (request.auth.uid == resource.data.uid || request.auth.token.email == resource.data.email))) && isValidMember(request.resource.data);
       allow delete: if isAdmin();
     }
@@ -149,8 +177,15 @@ service cloud.firestore {
 
     match /logs/{logId} {
       allow read: if isAdmin();
-      allow create: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidLog(request.resource.data);
       allow update, delete: if false;
+    }
+
+    match /announcements/{announcementId} {
+      allow read: if isAuthenticated();
+      allow create: if isAdmin() && isValidAnnouncement(request.resource.data);
+      allow update: if isAdmin() && isValidAnnouncement(request.resource.data);
+      allow delete: if isAdmin();
     }
 
     // Default deny

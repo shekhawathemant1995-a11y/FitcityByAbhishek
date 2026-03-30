@@ -61,6 +61,14 @@ export interface WorkoutPlan {
   }[];
 }
 
+export interface Announcement {
+  id?: string;
+  title: string;
+  content: string;
+  date: string;
+  authorId: string;
+}
+
 export const INITIAL_MEMBERS: Member[] = [
   {
     id: '1',

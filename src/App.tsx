@@ -34,7 +34,9 @@ import {
   CheckCircle2,
   Flame,
   ChevronDown,
-  UserPlus
+  UserPlus,
+  User as UserIcon,
+  Megaphone
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { QRCodeSVG } from 'qrcode.react';
@@ -51,7 +53,8 @@ import {
   ProgressRecord,
   PaymentRecord,
   NotificationRecord,
-  WorkoutPlan
+  WorkoutPlan,
+  Announcement
 } from './types';
 import { 
   db, 
@@ -187,6 +190,7 @@ function FitCityApp() {
   const [currentTime, setCurrentTime] = useState(new Date());
   const [renewPlan, setRenewPlan] = useState('');
   const [editPlan, setEditPlan] = useState('');
+  const [editStatus, setEditStatus] = useState<'Active' | 'Expired' | 'Pending'>('Active');
   
   const [attendanceModalMemberId, setAttendanceModalMemberId] = useState<string | null>(null);
   const [attendanceMonth, setAttendanceMonth] = useState<Date>(new Date());
@@ -216,12 +220,19 @@ function FitCityApp() {
 
   useEffect(() => {
     if (memberProfile) setRenewPlan(memberProfile.plan);
-    if (editingMember) setEditPlan(editingMember.plan);
+    if (editingMember) {
+      setEditPlan(editingMember.plan);
+      setEditStatus(editingMember.status === 'Pending' ? 'Active' : editingMember.status);
+    } else {
+      setEditPlan(PLANS[0].name);
+      setEditStatus('Active');
+    }
   }, [memberProfile, editingMember]);
   
   // Admin specific state
   const [logs, setLogs] = useState<any[]>([]);
-  const [pendingMembers, setPendingMembers] = useState<any[]>([]);
+  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [isAddAnnouncementModalOpen, setIsAddAnnouncementModalOpen] = useState(false);
   const [isEditingAdminProfile, setIsEditingAdminProfile] = useState(false);
   const [adminProfileData, setAdminProfileData] = useState<any>(null);
   const [logoFile, setLogoFile] = useState<File | null>(null);
@@ -342,23 +353,23 @@ function FitCityApp() {
     return () => unsubscribe();
   }, [isAuthReady, user, isAdmin]);
 
-  // Admin: Fetch pending members
+  // Fetch announcements (for both Admin and Members)
   useEffect(() => {
-    if (!isAuthReady || !user || !isAdmin) return;
+    if (!isAuthReady || !user) return;
 
-    const q = query(collection(db, 'users'), where('role', '==', 'member'), where('approved', '==', false));
+    const q = query(collection(db, 'announcements'), orderBy('date', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const pendingList: any[] = [];
+      const announcementsList: Announcement[] = [];
       snapshot.forEach((doc) => {
-        pendingList.push({ id: doc.id, ...doc.data() });
+        announcementsList.push({ id: doc.id, ...doc.data() } as Announcement);
       });
-      setPendingMembers(pendingList);
+      setAnnouncements(announcementsList);
     }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, 'users');
+      handleFirestoreError(error, OperationType.LIST, 'announcements');
     });
 
     return () => unsubscribe();
-  }, [isAuthReady, user, isAdmin]);
+  }, [isAuthReady, user]);
 
   // Admin: Fetch full profile
   useEffect(() => {
@@ -618,6 +629,40 @@ function FitCityApp() {
 
   const [isMemberProfileModalOpen, setIsMemberProfileModalOpen] = useState(false);
 
+  const [isRequestingMembership, setIsRequestingMembership] = useState(false);
+
+  const handleRequestMembership = async () => {
+    if (!user || !user.email) return;
+    setIsRequestingMembership(true);
+    try {
+      const newId = Math.random().toString(36).substr(2, 9);
+      await setDoc(doc(db, 'members', newId), {
+        id: newId,
+        uid: user.uid,
+        name: user.displayName || 'New Member',
+        email: user.email,
+        phone: '',
+        joinDate: new Date().toISOString().split('T')[0],
+        expiryDate: '',
+        plan: 'Basic',
+        amountPaid: 0,
+        status: 'Pending',
+        attendance: {},
+        photoURL: user.photoURL || ''
+      });
+      
+      await addDoc(collection(db, 'logs'), {
+        type: 'MembershipRequested',
+        message: `New membership requested by: ${user.email}`,
+        date: new Date().toISOString(),
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'members');
+    } finally {
+      setIsRequestingMembership(false);
+    }
+  };
+
   const handleLogout = async () => {
     try {
       await auth.signOut();
@@ -628,19 +673,45 @@ function FitCityApp() {
     }
   };
 
-  const handleApproveMember = async (memberId: string) => {
-    try {
-      await updateDoc(doc(db, 'users', memberId), { approved: true });
-    } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, 'users');
-    }
+  const handleApproveMember = (member: any) => {
+    setEditingMember(member);
+    setIsAddModalOpen(true);
   };
 
   const handleDeclineMember = async (memberId: string) => {
     try {
-      await updateDoc(doc(db, 'users', memberId), { approved: false, role: 'declined' });
+      await deleteDoc(doc(db, 'members', memberId));
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, 'users');
+      handleFirestoreError(error, OperationType.DELETE, 'members');
+    }
+  };
+
+  const handleAddAnnouncement = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!user) return;
+
+    const formData = new FormData(e.currentTarget);
+    const title = formData.get('title') as string;
+    const content = formData.get('content') as string;
+
+    try {
+      await addDoc(collection(db, 'announcements'), {
+        title,
+        content,
+        date: new Date().toISOString(),
+        authorId: user.uid
+      });
+      setIsAddAnnouncementModalOpen(false);
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, 'announcements');
+    }
+  };
+
+  const handleDeleteAnnouncement = async (announcementId: string) => {
+    try {
+      await deleteDoc(doc(db, 'announcements', announcementId));
+    } catch (error) {
+      handleFirestoreError(error, OperationType.DELETE, 'announcements');
     }
   };
 
@@ -721,6 +792,7 @@ function FitCityApp() {
         expiryDate: formData.get('expiryDate') as string,
         plan: planName,
         amountPaid: plan?.price || 0,
+        status: editStatus,
         photoURL
       };
 
@@ -739,7 +811,6 @@ function FitCityApp() {
           ...memberData,
           id: newId,
           joinDate: new Date().toISOString().split('T')[0],
-          status: 'Active',
           attendance: {}
         });
         // Log activity
@@ -1142,6 +1213,7 @@ function FitCityApp() {
               { id: 'attendance', icon: QrCode, label: 'Check-in' },
               { id: 'progress', icon: TrendingUp, label: 'Progress' },
               { id: 'payments', icon: CreditCard, label: 'Payments' },
+              { id: 'announcements', icon: Megaphone, label: 'Announcements' },
               { id: 'notifications', icon: Bell, label: 'Notifications' },
             ].map((item) => (
               <button
@@ -1172,12 +1244,13 @@ function FitCityApp() {
         </motion.aside>
 
         {/* Mobile Nav */}
-        <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white/90 dark:bg-[#0a0a0a]/90 backdrop-blur-xl border-t border-black/5 dark:border-white/10 flex justify-around p-2 z-50 pb-safe">
+        <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white/90 dark:bg-[#0a0a0a]/90 backdrop-blur-xl border-t border-black/5 dark:border-white/10 flex justify-around p-2 z-50 pb-safe overflow-x-auto">
           {[
             { id: 'dashboard', icon: LayoutDashboard, label: 'Dash' },
             { id: 'attendance', icon: QrCode, label: 'Check-in' },
             { id: 'progress', icon: TrendingUp, label: 'Progress' },
             { id: 'payments', icon: CreditCard, label: 'Pay' },
+            { id: 'announcements', icon: Megaphone, label: 'Announce' },
             { id: 'notifications', icon: Bell, label: 'Alerts' },
           ].map((item) => (
             <button
@@ -1248,8 +1321,30 @@ function FitCityApp() {
               <div className="flex flex-col items-center justify-center h-full text-center space-y-4">
                 <Users size={64} className="text-gray-500" />
                 <h2 className="text-2xl font-bold">Profile Not Found</h2>
-                <p className="text-gray-400 max-w-md">We couldn't find a member profile associated with your email ({user?.email}). Please contact the gym administrator to link your account.</p>
-                <button onClick={handleLogout} className="btn-primary px-8">Log Out</button>
+                <p className="text-gray-400 max-w-md">We couldn't find a member profile associated with your email ({user?.email}).</p>
+                <div className="flex gap-4 mt-4">
+                  <button 
+                    onClick={handleRequestMembership} 
+                    disabled={isRequestingMembership}
+                    className="btn-primary px-8 flex items-center gap-2"
+                  >
+                    {isRequestingMembership ? (
+                      <><div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Requesting...</>
+                    ) : (
+                      <><UserPlus size={18} /> Request Membership</>
+                    )}
+                  </button>
+                  <button onClick={handleLogout} className="px-8 py-3 rounded-xl border border-black/10 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/5 transition-colors font-bold">
+                    Log Out
+                  </button>
+                </div>
+              </div>
+            ) : memberProfile.status === 'Pending' ? (
+              <div className="flex flex-col items-center justify-center h-full text-center space-y-4">
+                <Clock size={64} className="text-orange-500" />
+                <h2 className="text-2xl font-bold">Membership Pending</h2>
+                <p className="text-gray-400 max-w-md">Your membership request is currently pending approval by the gym administrator. Please check back later.</p>
+                <button onClick={handleLogout} className="btn-primary px-8 mt-4">Log Out</button>
               </div>
             ) : (
               <AnimatePresence mode="wait">
@@ -1476,6 +1571,47 @@ function FitCityApp() {
                   </motion.div>
                 )}
 
+                {activeTab === 'announcements' && (
+                  <motion.div key="announcements" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
+                    <h2 className="text-2xl font-bold">Gym Announcements</h2>
+                    <div className="space-y-4">
+                      {announcements.length === 0 ? (
+                        <div className="text-center py-20 text-gray-500">
+                          <Megaphone size={48} className="mx-auto mb-4 opacity-20" />
+                          <p>No announcements yet.</p>
+                        </div>
+                      ) : (
+                        announcements.map((announcement) => {
+                          const isNew = new Date(announcement.date).getTime() > Date.now() - 48 * 60 * 60 * 1000;
+                          return (
+                            <div key={announcement.id} className={`p-6 rounded-2xl border transition-all ${
+                              isNew ? 'bg-brand-red/5 border-brand-red/20 ring-1 ring-brand-red/10' : 'bg-black/5 dark:bg-white/5 border-transparent'
+                            }`}>
+                              <div className="flex justify-between items-start mb-2">
+                                <div className="flex items-center gap-3">
+                                  <div className={`p-2 rounded-lg ${isNew ? 'bg-brand-red/20 text-brand-red' : 'bg-gray-500/20 text-gray-500'}`}>
+                                    <Megaphone size={18} />
+                                  </div>
+                                  <h3 className="font-bold text-lg">{announcement.title}</h3>
+                                  {isNew && (
+                                    <span className="px-2 py-0.5 rounded-full bg-brand-red text-white text-[10px] font-bold uppercase tracking-wider">
+                                      New
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="text-xs text-gray-500">
+                                  {new Date(announcement.date).toLocaleDateString()}
+                                </span>
+                              </div>
+                              <p className="text-gray-600 dark:text-gray-300 text-sm ml-11 whitespace-pre-wrap">{announcement.content}</p>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </motion.div>
+                )}
+
                 {activeTab === 'notifications' && (
                   <motion.div key="notifications" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
                     <h2 className="text-2xl font-bold">Notifications</h2>
@@ -1683,6 +1819,7 @@ function FitCityApp() {
             { id: 'requests', icon: UserPlus, label: 'Requests' },
             { id: 'schedule', icon: Calendar, label: 'Schedule' },
             { id: 'plans', icon: CreditCard, label: 'Plans' },
+            { id: 'announcements', icon: Megaphone, label: 'Announcements' },
           ].map((item) => (
             <button
               key={item.id}
@@ -1713,11 +1850,12 @@ function FitCityApp() {
       </motion.aside>
 
       {/* Mobile Bottom Nav */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white/90 dark:bg-[#0a0a0a]/90 backdrop-blur-xl border-t border-black/5 dark:border-white/10 flex justify-around p-2 z-50 pb-safe">
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white/90 dark:bg-[#0a0a0a]/90 backdrop-blur-xl border-t border-black/5 dark:border-white/10 flex justify-around p-2 z-50 pb-safe overflow-x-auto">
         {[
           { id: 'dashboard', icon: LayoutDashboard, label: 'Dash' },
           { id: 'members', icon: Users, label: 'Members' },
           { id: 'requests', icon: UserPlus, label: 'Requests' },
+          { id: 'announcements', icon: Megaphone, label: 'Announce' },
           { id: 'schedule', icon: Calendar, label: 'Schedule' },
           { id: 'plans', icon: CreditCard, label: 'Plans' },
         ].map((item) => (
@@ -2004,7 +2142,7 @@ function FitCityApp() {
                     <PopupMenu 
                       value={filterStatus} 
                       onChange={setFilterStatus} 
-                      options={[{label: 'All Status', value: 'All'}, {label: 'Active', value: 'Active'}, {label: 'Expired', value: 'Expired'}]}
+                      options={[{label: 'All Status', value: 'All'}, {label: 'Active', value: 'Active'}, {label: 'Expired', value: 'Expired'}, {label: 'Pending', value: 'Pending'}]}
                       className="w-48"
                     />
                   </div>
@@ -2067,10 +2205,12 @@ function FitCityApp() {
                           </td>
                           <td className="px-6 py-4 text-sm">{member.plan}</td>
                           <td className="px-6 py-4 text-sm text-gray-400">{member.joinDate}</td>
-                          <td className="px-6 py-4 text-sm text-gray-400">{member.expiryDate}</td>
+                          <td className="px-6 py-4 text-sm text-gray-400">{member.expiryDate || 'Pending'}</td>
                           <td className="px-6 py-4">
                             <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
-                              member.status === 'Active' ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500'
+                              member.status === 'Active' ? 'bg-green-500/10 text-green-500' : 
+                              member.status === 'Pending' ? 'bg-orange-500/10 text-orange-500' :
+                              'bg-red-500/10 text-red-500'
                             }`}>
                               {member.status}
                             </span>
@@ -2081,9 +2221,9 @@ function FitCityApp() {
                                 setEditingMember(member);
                                 setIsAddModalOpen(true);
                               }}
-                              className="text-gray-400 hover:text-black dark:hover:text-white transition-colors"
+                              className={`${member.status === 'Pending' ? 'text-orange-500 hover:text-orange-600' : 'text-gray-400 hover:text-black dark:hover:text-white'} transition-colors font-medium`}
                             >
-                              Edit
+                              {member.status === 'Pending' ? 'Approve' : 'Edit'}
                             </button>
                           </td>
                         </tr>
@@ -2137,20 +2277,43 @@ function FitCityApp() {
                   <table className="w-full text-left">
                     <thead>
                       <tr className="border-b border-black/5 dark:border-white/5 bg-black/5 dark:bg-white/5">
+                        <th className="px-6 py-4 text-sm font-semibold">Name</th>
                         <th className="px-6 py-4 text-sm font-semibold">Email</th>
+                        <th className="px-6 py-4 text-sm font-semibold">Request Date</th>
                         <th className="px-6 py-4 text-sm font-semibold">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-black/5 dark:divide-white/5">
-                      {pendingMembers.map((member) => (
-                        <tr key={member.id}>
-                          <td className="px-6 py-4">{member.email}</td>
-                          <td className="px-6 py-4 flex gap-2">
-                            <button onClick={() => handleApproveMember(member.id)} className="btn-primary py-1 px-3 text-sm">Confirm</button>
-                            <button onClick={() => handleDeclineMember(member.id)} className="bg-red-500/10 text-red-500 py-1 px-3 text-sm rounded-lg">Decline</button>
+                      {members.filter(m => m.status === 'Pending').length === 0 ? (
+                        <tr>
+                          <td colSpan={4} className="px-6 py-8 text-center text-gray-500">
+                            No pending requests at the moment.
                           </td>
                         </tr>
-                      ))}
+                      ) : (
+                        members.filter(m => m.status === 'Pending').map((member) => (
+                          <tr key={member.id}>
+                            <td className="px-6 py-4">
+                              <div className="flex items-center gap-3">
+                                {member.photoURL ? (
+                                  <img src={member.photoURL} alt={member.name} className="w-8 h-8 rounded-full object-cover" referrerPolicy="no-referrer" />
+                                ) : (
+                                  <div className="w-8 h-8 rounded-full bg-black/5 dark:bg-white/5 flex items-center justify-center">
+                                    <UserIcon size={16} className="text-gray-400" />
+                                  </div>
+                                )}
+                                <span className="font-medium">{member.name}</span>
+                              </div>
+                            </td>
+                            <td className="px-6 py-4 text-gray-500">{member.email}</td>
+                            <td className="px-6 py-4 text-gray-500">{member.joinDate}</td>
+                            <td className="px-6 py-4 flex gap-2">
+                              <button onClick={() => handleApproveMember(member)} className="btn-primary py-1 px-3 text-sm">Approve</button>
+                              <button onClick={() => handleDeclineMember(member.id)} className="bg-red-500/10 text-red-500 py-1 px-3 text-sm rounded-lg font-bold">Decline</button>
+                            </td>
+                          </tr>
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -2189,6 +2352,49 @@ function FitCityApp() {
                     </button>
                   </div>
                 ))}
+              </motion.div>
+            )}
+            {activeTab === 'announcements' && (
+              <motion.div key="announcements" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
+                <div className="flex justify-between items-center">
+                  <h2 className="text-2xl font-bold">Announcements</h2>
+                  <button 
+                    onClick={() => {
+                      setIsAddAnnouncementModalOpen(true);
+                    }}
+                    className="btn-primary flex items-center gap-2"
+                  >
+                    <Plus size={20} /> New Announcement
+                  </button>
+                </div>
+                
+                <div className="grid grid-cols-1 gap-4">
+                  {announcements.length === 0 ? (
+                    <div className="glass-card p-8 text-center text-gray-500">
+                      No announcements yet.
+                    </div>
+                  ) : (
+                    announcements.map((announcement) => (
+                      <div key={announcement.id} className="glass-card p-6 relative group">
+                        <div className="flex justify-between items-start mb-2">
+                          <h3 className="text-xl font-bold">{announcement.title}</h3>
+                          <div className="flex items-center gap-4">
+                            <span className="text-sm text-gray-500">
+                              {new Date(announcement.date).toLocaleDateString()} {new Date(announcement.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                            </span>
+                            <button 
+                              onClick={() => handleDeleteAnnouncement(announcement.id!)}
+                              className="text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                            >
+                              <X size={18} />
+                            </button>
+                          </div>
+                        </div>
+                        <p className="text-gray-600 dark:text-gray-300 whitespace-pre-wrap">{announcement.content}</p>
+                      </div>
+                    ))
+                  )}
+                </div>
               </motion.div>
             )}
           </AnimatePresence>
@@ -2230,7 +2436,7 @@ function FitCityApp() {
                   </div>
                   <div className="space-y-2">
                     <label className="text-xs font-bold text-gray-400 uppercase">Phone Number</label>
-                    <input name="phone" defaultValue={editingMember?.phone} required className="input-field w-full" placeholder="9876543210" />
+                    <input name="phone" defaultValue={editingMember?.phone} required={editStatus !== 'Pending'} className="input-field w-full" placeholder="9876543210" />
                   </div>
                 </div>
 
@@ -2252,7 +2458,21 @@ function FitCityApp() {
                   </div>
                   <div className="space-y-2">
                     <label className="text-xs font-bold text-gray-400 uppercase">Expiry Date</label>
-                    <input name="expiryDate" type="date" defaultValue={editingMember?.expiryDate} required className="input-field w-full" />
+                    <input name="expiryDate" type="date" defaultValue={editingMember?.expiryDate} required={editStatus !== 'Pending'} className="input-field w-full" />
+                  </div>
+                  <div className="space-y-2 sm:col-span-2">
+                    <label className="text-xs font-bold text-gray-400 uppercase">Status</label>
+                    <input type="hidden" name="status" value={editStatus} />
+                    <PopupMenu 
+                      value={editStatus} 
+                      onChange={(val) => setEditStatus(val as any)} 
+                      options={[
+                        {label: 'Active', value: 'Active'}, 
+                        {label: 'Pending', value: 'Pending'},
+                        {label: 'Expired', value: 'Expired'}
+                      ]}
+                      className="w-full"
+                    />
                   </div>
                 </div>
 
@@ -2290,6 +2510,53 @@ function FitCityApp() {
                   ) : (
                     editingMember ? 'Save Changes' : 'Register Member'
                   )}
+                </button>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Add Announcement Modal */}
+      <AnimatePresence>
+        {isAddAnnouncementModalOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsAddAnnouncementModalOpen(false)}
+              className="absolute inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="glass-card w-full max-w-lg p-8 relative z-10"
+            >
+              <div className="flex items-center justify-between mb-8">
+                <h2 className="text-2xl font-bold">New Announcement</h2>
+                <button onClick={() => setIsAddAnnouncementModalOpen(false)} className="p-2 hover:bg-black/5 dark:hover:bg-white/5 rounded-full transition-colors">
+                  <X size={24} />
+                </button>
+              </div>
+
+              <form onSubmit={handleAddAnnouncement} className="space-y-6">
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-gray-400 uppercase">Title</label>
+                  <input name="title" required className="input-field w-full" placeholder="Announcement Title" />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-gray-400 uppercase">Content</label>
+                  <textarea name="content" required className="input-field w-full min-h-[150px] resize-y" placeholder="Announcement Details..." />
+                </div>
+                
+                <button 
+                  type="submit" 
+                  className="btn-primary w-full py-4 text-lg mt-4 flex items-center justify-center gap-2"
+                >
+                  Post Announcement
                 </button>
               </form>
             </motion.div>
@@ -2625,9 +2892,10 @@ function FitCityApp() {
                           <div className="flex items-center justify-between">
                             <span className="text-gray-400">Expiry Date</span>
                             <span className={`font-bold ${
+                              !attendanceModalMember.expiryDate ? 'text-orange-500' :
                               new Date(attendanceModalMember.expiryDate) < new Date() ? 'text-red-500' : 'text-green-500'
                             }`}>
-                              {attendanceModalMember.expiryDate}
+                              {attendanceModalMember.expiryDate || 'Pending'}
                             </span>
                           </div>
                           <div className="flex items-center justify-between">

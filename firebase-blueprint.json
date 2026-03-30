@@ -110,12 +110,25 @@
       "type": "object",
       "properties": {
         "id": { "type": "string" },
-        "type": { "type": "string", "enum": ["MemberAdded", "MemberUpdated", "PlanUpdated", "ProfileUpdated"] },
+        "type": { "type": "string", "enum": ["MemberAdded", "MemberUpdated", "PlanUpdated", "ProfileUpdated", "MembershipRequested"] },
         "message": { "type": "string" },
         "date": { "type": "string", "format": "date-time" },
         "adminId": { "type": "string" }
       },
-      "required": ["type", "message", "date", "adminId"]
+      "required": ["type", "message", "date"]
+    },
+    "Announcement": {
+      "title": "Announcement",
+      "description": "Gym announcements.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "date": { "type": "string", "format": "date-time" },
+        "authorId": { "type": "string" }
+      },
+      "required": ["title", "content", "date", "authorId"]
     }
   },
   "firestore": {
@@ -146,6 +159,10 @@
     "/logs/{logId}": {
       "schema": "Log",
       "description": "System activity logs."
+    },
+    "/announcements/{announcementId}": {
+      "schema": "Announcement",
+      "description": "Gym announcements."
     }
   }
 }
