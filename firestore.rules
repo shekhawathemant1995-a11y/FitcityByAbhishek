@@ -1,0 +1,161 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: members
+    // Document ID: auto-generated or memberId
+    // Fields:
+    //   - id: string (required)
+    //   - name: string (required, size < 100)
+    //   - phone: string (required, size < 20)
+    //   - email: string (optional, isValidEmail)
+    //   - joinDate: string (required, isValidDateString)
+    //   - expiryDate: string (required, isValidDateString)
+    //   - plan: string (required)
+    //   - status: string (required, enum: ['Active', 'Expired', 'Pending'])
+    //   - amountPaid: number (required, >= 0)
+    //   - attendance: map (optional, keys are date strings, values are bool)
+    //
+    // Collection: users
+    // Document ID: userId (Auth UID)
+    // Fields:
+    //   - uid: string (required, matches doc ID)
+    //   - email: string (required, isValidEmail)
+    //   - role: string (required, enum: ['admin', 'staff'])
+    //   - displayName: string (optional)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        (
+          ((request.auth.token.email == "hemants.shekhawat18@gmail.com" || request.auth.token.email == "info.fc@gmail.com" || request.auth.token.email == "Info.fc@gmail.com") && request.auth.token.email_verified == true) ||
+          (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
+        );
+    }
+
+    function isValidEmail(email) {
+      return email is string &&
+        email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidDateString(dateStr) {
+      return dateStr is string &&
+        dateStr.matches("^\\d{4}-\\d{2}-\\d{2}$");
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidMember(data) {
+      let requiredFields = ['id', 'name', 'phone', 'joinDate', 'expiryDate', 'plan', 'status', 'amountPaid'];
+      let allowedFields = ['id', 'name', 'phone', 'email', 'joinDate', 'expiryDate', 'plan', 'status', 'amountPaid', 'attendance', 'uid'];
+      
+      return hasRequiredFields(requiredFields) &&
+             hasOnlyAllowedFields(allowedFields) &&
+             data.id is string &&
+             data.name is string && data.name.size() > 0 && data.name.size() < 100 &&
+             data.phone is string && data.phone.size() > 0 && data.phone.size() < 20 &&
+             (!('email' in data) || isValidEmail(data.email)) &&
+             isValidDateString(data.joinDate) &&
+             isValidDateString(data.expiryDate) &&
+             data.plan is string &&
+             data.status in ['Active', 'Expired', 'Pending'] &&
+             data.amountPaid is number && data.amountPaid >= 0 &&
+             (!('attendance' in data) || data.attendance is map) &&
+             (!('uid' in data) || data.uid is string);
+    }
+
+    function isValidUser(data) {
+      let requiredFields = ['uid', 'email', 'role'];
+      let allowedFields = ['uid', 'email', 'role', 'displayName', 'phone', 'location'];
+      
+      return hasRequiredFields(requiredFields) &&
+             hasOnlyAllowedFields(allowedFields) &&
+             data.uid is string && data.uid == request.auth.uid &&
+             isValidEmail(data.email) &&
+             data.role in ['admin', 'staff'];
+    }
+
+    // ===============================================================
+    // Match Rules
+    // ===============================================================
+
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isAuthenticated() && (isOwner(userId) || isAdmin()) && isValidUser(request.resource.data);
+      allow update: if isAuthenticated() && (isOwner(userId) || isAdmin()) && isValidUser(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /members/{memberId} {
+      allow read: if isAuthenticated();
+      allow create: if isAdmin() && isValidMember(request.resource.data);
+      allow update: if (isAdmin() || (isAuthenticated() && (request.auth.uid == resource.data.uid || request.auth.token.email == resource.data.email))) && isValidMember(request.resource.data);
+      allow delete: if isAdmin();
+    }
+
+    match /progress/{progressId} {
+      allow read: if isAuthenticated() && (request.auth.uid == resource.data.uid || isAdmin());
+      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.uid;
+      allow update: if isAuthenticated() && request.auth.uid == resource.data.uid && request.auth.uid == request.resource.data.uid;
+      allow delete: if isAdmin();
+    }
+
+    match /payments/{paymentId} {
+      allow read: if isAuthenticated() && (request.auth.uid == resource.data.uid || isAdmin());
+      allow create: if isAuthenticated() && request.auth.uid == request.resource.data.uid;
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /notifications/{notificationId} {
+      allow read: if isAuthenticated() && (request.auth.uid == resource.data.uid || isAdmin());
+      allow create: if isAdmin() || (isAuthenticated() && request.auth.uid == request.resource.data.uid);
+      allow update: if isAuthenticated() && request.auth.uid == resource.data.uid && 
+                    request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+      allow delete: if isAdmin();
+    }
+
+    match /workouts/{workoutId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /logs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAuthenticated();
+      allow update, delete: if false;
+    }
+
+    // Default deny
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}
