@@ -13,6 +13,7 @@ export interface Member {
   plan: MembershipType;
   status: 'Active' | 'Expired' | 'Pending';
   amountPaid: number;
+  photoURL?: string;
   attendance?: Record<string, boolean>;
 }
 

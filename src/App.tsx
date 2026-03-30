@@ -33,10 +33,15 @@ import {
   History,
   CheckCircle2,
   Flame,
-  ChevronDown
+  ChevronDown,
+  UserPlus
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { QRCodeSVG } from 'qrcode.react';
+import { PopupMenu } from './components/PopupMenu';
+import { 
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, AreaChart, Area 
+} from 'recharts';
 import { 
   Member, 
   INITIAL_MEMBERS, 
@@ -71,7 +76,13 @@ import {
   handleFirestoreError,
   User,
   getDocs,
-  addDoc
+  addDoc,
+  deleteDoc,
+  getDocFromServer,
+  storage,
+  ref,
+  uploadBytes,
+  getDownloadURL
 } from './firebase';
 
 interface ErrorBoundaryProps {
@@ -159,6 +170,7 @@ function FitCityApp() {
   const [members, setMembers] = useState<Member[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [editingMember, setEditingMember] = useState<Member | null>(null);
   const [isAdminDropdownOpen, setIsAdminDropdownOpen] = useState(false);
   const [isAdminProfileOpen, setIsAdminProfileOpen] = useState(false);
@@ -169,8 +181,13 @@ function FitCityApp() {
            (!localStorage.getItem('fitcity_theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
   });
   const [searchTerm, setSearchTerm] = useState('');
-  
+  const [filterPlan, setFilterPlan] = useState<string>('All');
+  const [filterStatus, setFilterStatus] = useState<string>('All');
+  const [selectedMembers, setSelectedMembers] = useState<string[]>([]);
   const [currentTime, setCurrentTime] = useState(new Date());
+  const [renewPlan, setRenewPlan] = useState('');
+  const [editPlan, setEditPlan] = useState('');
+  
   const [attendanceModalMemberId, setAttendanceModalMemberId] = useState<string | null>(null);
   const [attendanceMonth, setAttendanceMonth] = useState<Date>(new Date());
   const [selectedMemberProgress, setSelectedMemberProgress] = useState<ProgressRecord[]>([]);
@@ -186,13 +203,48 @@ function FitCityApp() {
   const [isCheckInModalOpen, setIsCheckInModalOpen] = useState(false);
   const [isLogStatsModalOpen, setIsLogStatsModalOpen] = useState(false);
   const [isRenewModalOpen, setIsRenewModalOpen] = useState(false);
+
+  useEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('fitcity_theme', 'dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('fitcity_theme', 'light');
+    }
+  }, [isDarkMode]);
+
+  useEffect(() => {
+    if (memberProfile) setRenewPlan(memberProfile.plan);
+    if (editingMember) setEditPlan(editingMember.plan);
+  }, [memberProfile, editingMember]);
   
   // Admin specific state
   const [logs, setLogs] = useState<any[]>([]);
+  const [pendingMembers, setPendingMembers] = useState<any[]>([]);
   const [isEditingAdminProfile, setIsEditingAdminProfile] = useState(false);
   const [adminProfileData, setAdminProfileData] = useState<any>(null);
+  const [logoFile, setLogoFile] = useState<File | null>(null);
 
   const isAdmin = userRole === 'admin' || (user && (user.email === 'hemants.shekhawat18@gmail.com' || user.email === 'info.fc@gmail.com' || user.email === 'Info.fc@gmail.com'));
+
+  const chartData = React.useMemo(() => {
+    const revenueByMonth: Record<string, number> = {};
+    const newMembersByMonth: Record<string, number> = {};
+    
+    members.forEach(m => {
+      const month = m.joinDate.substring(0, 7); // YYYY-MM
+      newMembersByMonth[month] = (newMembersByMonth[month] || 0) + 1;
+      revenueByMonth[month] = (revenueByMonth[month] || 0) + m.amountPaid;
+    });
+
+    const sortedMonths = Object.keys(newMembersByMonth).sort();
+    return sortedMonths.map(month => ({
+      month,
+      revenue: revenueByMonth[month] || 0,
+      newMembers: newMembersByMonth[month] || 0
+    }));
+  }, [members]);
 
   const attendanceModalMember = members.find(m => m.id === attendanceModalMemberId) || null;
 
@@ -285,6 +337,24 @@ function FitCityApp() {
       setLogs(logsList);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'logs');
+    });
+
+    return () => unsubscribe();
+  }, [isAuthReady, user, isAdmin]);
+
+  // Admin: Fetch pending members
+  useEffect(() => {
+    if (!isAuthReady || !user || !isAdmin) return;
+
+    const q = query(collection(db, 'users'), where('role', '==', 'member'), where('approved', '==', false));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const pendingList: any[] = [];
+      snapshot.forEach((doc) => {
+        pendingList.push({ id: doc.id, ...doc.data() });
+      });
+      setPendingMembers(pendingList);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'users');
     });
 
     return () => unsubscribe();
@@ -438,25 +508,29 @@ function FitCityApp() {
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
-      if (!user.emailVerified) {
-        setLoginError('Please verify your email address before logging in.');
-        await auth.signOut();
-        return;
-      }
-
-      // Check role
+      // Check role and approval status
       const userDoc = await getDoc(doc(db, 'users', user.uid));
       if (userDoc.exists()) {
-        const role = userDoc.data().role;
+        const userData = userDoc.data();
+        const role = userData.role;
+        const approved = userData.approved;
+
         if (loginMode === 'admin' && role !== 'admin') {
           setLoginError('You do not have admin access.');
           await auth.signOut();
           return;
         }
-        if (loginMode === 'member' && role !== 'member') {
-          setLoginError('You do not have member access.');
-          await auth.signOut();
-          return;
+        if (loginMode === 'member') {
+          if (role !== 'member') {
+            setLoginError('You do not have member access.');
+            await auth.signOut();
+            return;
+          }
+          if (!approved) {
+            setLoginError('Your account is pending admin approval.');
+            await auth.signOut();
+            return;
+          }
         }
       } else {
         setLoginError('User role not found.');
@@ -468,16 +542,19 @@ function FitCityApp() {
     } catch (error: any) {
       console.error("Login Error:", error);
       
-      if (error.code === 'auth/invalid-credential') {
+      const errorCode = error.code || '';
+      const errorMessage = error.message || '';
+
+      if (errorCode === 'auth/invalid-credential' || errorMessage.includes('auth/invalid-credential') || errorCode === 'auth/wrong-password' || errorMessage.includes('auth/wrong-password') || errorCode === 'auth/user-not-found' || errorMessage.includes('auth/user-not-found')) {
         setLoginError('Invalid email or password.');
-      } else if (error.code === 'auth/user-disabled') {
+      } else if (errorCode === 'auth/user-disabled' || errorMessage.includes('auth/user-disabled')) {
         setLoginError('This account has been disabled.');
-      } else if (error.code === 'auth/too-many-requests') {
+      } else if (errorCode === 'auth/too-many-requests' || errorMessage.includes('auth/too-many-requests')) {
         setLoginError('Too many attempts. Please try again later.');
-      } else if (error.code === 'auth/unauthorized-domain') {
+      } else if (errorCode === 'auth/unauthorized-domain' || errorMessage.includes('auth/unauthorized-domain')) {
         setLoginError('This domain is not authorized.');
       } else {
-        setLoginError(`Login failed: ${error.message}`);
+        setLoginError(`Login failed: ${errorMessage}`);
       }
     }
   };
@@ -494,28 +571,30 @@ function FitCityApp() {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
-      await sendEmailVerification(user);
-
       // Create user document
       await setDoc(doc(db, 'users', user.uid), {
         uid: user.uid,
         email: user.email,
         role: loginMode, // 'admin' or 'member'
-        displayName: email.split('@')[0]
+        displayName: email.split('@')[0],
+        approved: loginMode === 'admin' ? true : false // Admins are auto-approved
       });
 
-      setLoginError('Account created! Please check your email for verification.');
+      setLoginError('Account created! Please wait for admin approval.');
       await auth.signOut();
     } catch (error: any) {
       console.error("Sign Up Error:", error);
-      if (error.code === 'auth/email-already-in-use') {
+      const errorCode = error.code || '';
+      const errorMessage = error.message || '';
+      
+      if (errorCode === 'auth/email-already-in-use' || errorMessage.includes('auth/email-already-in-use')) {
         setLoginError('This email is already in use. Please login instead.');
-      } else if (error.code === 'auth/weak-password') {
+      } else if (errorCode === 'auth/weak-password' || errorMessage.includes('auth/weak-password')) {
         setLoginError('Password should be at least 6 characters.');
-      } else if (error.code === 'auth/invalid-email') {
+      } else if (errorCode === 'auth/invalid-email' || errorMessage.includes('auth/invalid-email')) {
         setLoginError('Invalid email address.');
       } else {
-        setLoginError(`Failed to sign up: ${error.message}`);
+        setLoginError(`Failed to sign up: ${errorMessage}`);
       }
     }
   };
@@ -537,6 +616,8 @@ function FitCityApp() {
     }
   };
 
+  const [isMemberProfileModalOpen, setIsMemberProfileModalOpen] = useState(false);
+
   const handleLogout = async () => {
     try {
       await auth.signOut();
@@ -545,6 +626,38 @@ function FitCityApp() {
     } catch (error) {
       console.error("Logout Error:", error);
     }
+  };
+
+  const handleApproveMember = async (memberId: string) => {
+    try {
+      await updateDoc(doc(db, 'users', memberId), { approved: true });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'users');
+    }
+  };
+
+  const handleDeclineMember = async (memberId: string) => {
+    try {
+      await updateDoc(doc(db, 'users', memberId), { approved: false, role: 'declined' });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, 'users');
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    for (const id of selectedMembers) {
+      await deleteDoc(doc(db, 'members', id));
+    }
+    setMembers(prev => prev.filter(m => !selectedMembers.includes(m.id)));
+    setSelectedMembers([]);
+  };
+
+  const handleBulkStatus = async (status: string) => {
+    for (const id of selectedMembers) {
+      await updateDoc(doc(db, 'members', id), { status });
+    }
+    setMembers(prev => prev.map(m => selectedMembers.includes(m.id) ? { ...m, status } : m));
+    setSelectedMembers([]);
   };
 
   const stats = {
@@ -560,8 +673,9 @@ function FitCityApp() {
   };
 
   const filteredMembers = members.filter(m => 
-    m.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    m.phone.includes(searchTerm)
+    (m.name.toLowerCase().includes(searchTerm.toLowerCase()) || m.phone.includes(searchTerm)) &&
+    (filterPlan === 'All' || m.plan === filterPlan) &&
+    (filterStatus === 'All' || m.status === filterStatus)
   );
 
   const formatTimeAgo = (dateStr: string) => {
@@ -576,23 +690,40 @@ function FitCityApp() {
     return date.toLocaleDateString();
   };
 
+  const [isRegistering, setIsRegistering] = useState(false);
+
   const handleAddMember = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!user) return;
+    setIsRegistering(true);
     const formData = new FormData(e.currentTarget);
     const planName = formData.get('plan') as MembershipType;
     const plan = PLANS.find(p => p.name === planName);
     
-    const memberData = {
-      name: formData.get('name') as string,
-      phone: formData.get('phone') as string,
-      email: formData.get('email') as string,
-      expiryDate: formData.get('expiryDate') as string,
-      plan: planName,
-      amountPaid: plan?.price || 0,
-    };
-
     try {
+      let photoURL = editingMember?.photoURL || '';
+      if (selectedFile) {
+        try {
+          const storageRef = ref(storage, `members/${Date.now()}_${selectedFile.name}`);
+          const metadata = { contentType: selectedFile.type };
+          await uploadBytes(storageRef, selectedFile, metadata);
+          photoURL = await getDownloadURL(storageRef);
+        } catch (storageError: any) {
+          console.error("Storage Error:", storageError);
+          throw new Error(`Failed to upload image: ${storageError.message || 'Unknown error'}. Please ensure Firebase Storage is enabled and rules allow access.`);
+        }
+      }
+      
+      const memberData = {
+        name: formData.get('name') as string,
+        phone: formData.get('phone') as string,
+        email: formData.get('email') as string,
+        expiryDate: formData.get('expiryDate') as string,
+        plan: planName,
+        amountPaid: plan?.price || 0,
+        photoURL
+      };
+
       if (editingMember) {
         await updateDoc(doc(db, 'members', editingMember.id), memberData);
         // Log activity
@@ -621,8 +752,11 @@ function FitCityApp() {
       }
       setIsAddModalOpen(false);
       setEditingMember(null);
+      setSelectedFile(null);
     } catch (error) {
       handleFirestoreError(error, editingMember ? OperationType.UPDATE : OperationType.CREATE, 'members');
+    } finally {
+      setIsRegistering(false);
     }
   };
 
@@ -753,22 +887,39 @@ function FitCityApp() {
     }
   };
 
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+
   const handleEditAdminProfile = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!user) return;
+    setIsSavingProfile(true);
     const formData = new FormData(e.currentTarget);
     const displayName = formData.get('displayName') as string;
     const phone = formData.get('phone') as string;
     const location = formData.get('location') as string;
 
     try {
+      let logoURL = adminProfileData?.logoURL || '';
+      if (logoFile) {
+        try {
+          const storageRef = ref(storage, `admin/logo_${Date.now()}_${logoFile.name}`);
+          const metadata = { contentType: logoFile.type };
+          await uploadBytes(storageRef, logoFile, metadata);
+          logoURL = await getDownloadURL(storageRef);
+        } catch (storageError: any) {
+          console.error("Storage Error:", storageError);
+          throw new Error(`Failed to upload logo: ${storageError.message || 'Unknown error'}. Please ensure Firebase Storage is enabled and rules allow access.`);
+        }
+      }
+
       await setDoc(doc(db, 'users', user.uid), {
         uid: user.uid,
         email: user.email,
         role: isAdmin ? 'admin' : 'staff',
         displayName,
         phone,
-        location
+        location,
+        logoURL
       }, { merge: true });
       
       // Log activity
@@ -780,8 +931,11 @@ function FitCityApp() {
       });
       
       setIsEditingAdminProfile(false);
+      setLogoFile(null);
     } catch (error) {
       handleFirestoreError(error, OperationType.UPDATE, `users/${user.uid}`);
+    } finally {
+      setIsSavingProfile(false);
     }
   };
 
@@ -967,8 +1121,12 @@ function FitCityApp() {
           className="hidden md:flex bg-gray-50 dark:bg-brand-gray border-r border-black/5 dark:border-white/5 flex-col z-50"
         >
           <div className="p-6 flex items-center gap-4">
-            <div className="w-10 h-10 bg-brand-red rounded-full flex items-center justify-center flex-shrink-0">
-              <span className="text-2xl font-bold italic">F</span>
+            <div className="w-10 h-10 bg-brand-red rounded-full flex items-center justify-center flex-shrink-0 overflow-hidden">
+              {adminProfileData?.logoURL ? (
+                <img src={adminProfileData.logoURL} alt="Logo" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+              ) : (
+                <span className="text-2xl font-bold italic text-white">F</span>
+              )}
             </div>
             {isSidebarOpen && (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="font-bold text-xl tracking-tight">
@@ -1061,6 +1219,15 @@ function FitCityApp() {
                         <p className="text-sm font-bold truncate">{user?.email}</p>
                       </div>
                       <div className="p-2">
+                        <button 
+                          onClick={() => {
+                            setIsMemberProfileModalOpen(true);
+                            setIsAdminDropdownOpen(false);
+                          }}
+                          className="w-full text-left px-4 py-2 text-sm text-gray-600 dark:text-gray-300 hover:bg-black/5 dark:hover:bg-white/10 hover:text-brand-red rounded-lg flex items-center gap-2"
+                        >
+                          <Users size={16} /> My Profile
+                        </button>
                         <button onClick={handleLogout} className="w-full text-left px-4 py-2 text-sm text-red-500 hover:bg-red-500/10 rounded-lg flex items-center gap-2">
                           <LogOut size={16} /> Log Out
                         </button>
@@ -1089,30 +1256,30 @@ function FitCityApp() {
                 {activeTab === 'dashboard' && (
                   <motion.div key="dash" initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-8">
                     {/* Member Stats */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                      <div className="glass-card p-6">
-                        <p className="text-gray-400 text-sm mb-1">Membership Status</p>
+                    <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
+                      <div className="glass-card p-4 md:p-6">
+                        <p className="text-[10px] md:text-sm text-gray-400 mb-1 leading-tight">Membership Status</p>
                         <div className="flex items-center gap-2">
-                          <h3 className={`text-2xl font-bold ${memberProfile.status === 'Active' ? 'text-green-500' : 'text-red-500'}`}>
+                          <h3 className={`text-lg md:text-2xl font-bold ${memberProfile.status === 'Active' ? 'text-green-500' : 'text-red-500'}`}>
                             {memberProfile.status}
                           </h3>
-                          {memberProfile.status === 'Active' && <CheckCircle2 size={20} className="text-green-500" />}
+                          {memberProfile.status === 'Active' && <CheckCircle2 size={16} className="text-green-500 md:w-5 md:h-5" />}
                         </div>
                       </div>
-                      <div className="glass-card p-6">
-                        <p className="text-gray-400 text-sm mb-1">Days Left</p>
-                        <h3 className="text-3xl font-bold">{getDaysLeft()}</h3>
+                      <div className="glass-card p-4 md:p-6">
+                        <p className="text-[10px] md:text-sm text-gray-400 mb-1 leading-tight">Days Left</p>
+                        <h3 className="text-xl md:text-3xl font-bold">{getDaysLeft()}</h3>
                       </div>
-                      <div className="glass-card p-6">
-                        <p className="text-gray-400 text-sm mb-1">Attendance Streak</p>
+                      <div className="glass-card p-4 md:p-6">
+                        <p className="text-[10px] md:text-sm text-gray-400 mb-1 leading-tight">Attendance Streak</p>
                         <div className="flex items-center gap-2">
-                          <h3 className="text-3xl font-bold">{calculateStreak()}</h3>
-                          <Flame size={24} className="text-orange-500 animate-bounce" />
+                          <h3 className="text-xl md:text-3xl font-bold">{calculateStreak()}</h3>
+                          <Flame size={18} className="text-orange-500 animate-bounce md:w-6 md:h-6" />
                         </div>
                       </div>
-                      <div className="glass-card p-6">
-                        <p className="text-gray-400 text-sm mb-1">Active Plan</p>
-                        <h3 className="text-xl font-bold truncate">{memberProfile.plan}</h3>
+                      <div className="glass-card p-4 md:p-6">
+                        <p className="text-[10px] md:text-sm text-gray-400 mb-1 leading-tight">Active Plan</p>
+                        <h3 className="text-sm md:text-xl font-bold truncate">{memberProfile.plan}</h3>
                       </div>
                     </div>
 
@@ -1459,13 +1626,13 @@ function FitCityApp() {
                 <form onSubmit={handleRenewMembership} className="space-y-6">
                   <div className="space-y-2">
                     <label className="text-xs font-bold text-gray-400 uppercase">Select Plan</label>
-                    <select name="plan" className="input-field w-full" defaultValue={memberProfile.plan}>
-                      {PLANS.map(p => (
-                        <option key={p.name} value={p.name}>
-                          {p.name} - ₹{p.price} ({p.duration})
-                        </option>
-                      ))}
-                    </select>
+                    <input type="hidden" name="plan" value={renewPlan} />
+                    <PopupMenu 
+                      value={renewPlan} 
+                      onChange={setRenewPlan} 
+                      options={PLANS.map(p => ({label: `${p.name} - ₹${p.price} (${p.duration})`, value: p.name}))}
+                      className="w-full"
+                    />
                   </div>
                   <div className="p-4 rounded-xl bg-brand-red/10 border border-brand-red/20">
                     <p className="text-sm text-gray-300">
@@ -1494,8 +1661,12 @@ function FitCityApp() {
         className="hidden md:flex bg-gray-50 dark:bg-brand-gray border-r border-black/5 dark:border-white/5 flex-col z-50"
       >
         <div className="p-6 flex items-center gap-4">
-          <div className="w-10 h-10 bg-brand-red rounded-full flex items-center justify-center flex-shrink-0">
-            <span className="text-2xl font-bold italic">F</span>
+          <div className="w-10 h-10 bg-brand-red rounded-full flex items-center justify-center flex-shrink-0 overflow-hidden">
+            {adminProfileData?.logoURL ? (
+              <img src={adminProfileData.logoURL} alt="Logo" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+            ) : (
+              <span className="text-2xl font-bold italic text-white">F</span>
+            )}
           </div>
           {isSidebarOpen && (
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="font-bold text-xl tracking-tight">
@@ -1509,6 +1680,7 @@ function FitCityApp() {
           {[
             { id: 'dashboard', icon: LayoutDashboard, label: 'Dashboard' },
             { id: 'members', icon: Users, label: 'Members' },
+            { id: 'requests', icon: UserPlus, label: 'Requests' },
             { id: 'schedule', icon: Calendar, label: 'Schedule' },
             { id: 'plans', icon: CreditCard, label: 'Plans' },
           ].map((item) => (
@@ -1545,6 +1717,7 @@ function FitCityApp() {
         {[
           { id: 'dashboard', icon: LayoutDashboard, label: 'Dash' },
           { id: 'members', icon: Users, label: 'Members' },
+          { id: 'requests', icon: UserPlus, label: 'Requests' },
           { id: 'schedule', icon: Calendar, label: 'Schedule' },
           { id: 'plans', icon: CreditCard, label: 'Plans' },
         ].map((item) => (
@@ -1568,6 +1741,13 @@ function FitCityApp() {
         {/* Header */}
         <header className="h-16 md:h-20 border-b border-black/5 dark:border-white/5 flex items-center justify-between px-4 md:px-8 bg-white/50 dark:bg-black/50 backdrop-blur-xl sticky top-0 z-40">
           <div className="flex items-center gap-4 md:gap-6">
+            <div className="md:hidden w-8 h-8 bg-brand-red rounded-lg flex items-center justify-center overflow-hidden">
+              {adminProfileData?.logoURL ? (
+                <img src={adminProfileData.logoURL} alt="Logo" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+              ) : (
+                <Activity size={18} className="text-white" />
+              )}
+            </div>
             <h1 className="text-xl md:text-2xl font-bold capitalize">{activeTab}</h1>
             <div className="hidden md:flex items-center gap-4 text-sm text-gray-400 border-l border-black/10 dark:border-white/10 pl-6">
               <div className="flex items-center gap-2">
@@ -1614,8 +1794,12 @@ function FitCityApp() {
                   <div className="text-sm font-medium">{adminProfileData?.displayName || user?.displayName || 'Admin'}</div>
                   <div className="text-[10px] text-gray-500">{user?.email || 'FitCity Manager'}</div>
                 </div>
-                <div className="w-8 h-8 md:w-10 md:h-10 rounded-full bg-gradient-to-br from-brand-red to-red-800 flex items-center justify-center font-bold text-sm md:text-base">
-                  {(adminProfileData?.displayName?.[0] || user?.displayName?.[0] || 'A').toUpperCase()}
+                <div className="w-8 h-8 md:w-10 md:h-10 rounded-full bg-gradient-to-br from-brand-red to-red-800 flex items-center justify-center font-bold text-sm md:text-base overflow-hidden">
+                  {adminProfileData?.logoURL ? (
+                    <img src={adminProfileData.logoURL} alt="Logo" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                  ) : (
+                    (adminProfileData?.displayName?.[0] || user?.displayName?.[0] || 'A').toUpperCase()
+                  )}
                 </div>
               </button>
 
@@ -1673,23 +1857,54 @@ function FitCityApp() {
                 className="space-y-8"
               >
                 {/* Stats Grid */}
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
                   {[
                     { label: 'Total Members', value: stats.total, icon: Users, color: 'text-blue-500' },
                     { label: 'Active Members', value: stats.active, icon: Users, color: 'text-green-500' },
                     { label: 'Expiring Soon', value: stats.expiring, icon: Clock, color: 'text-yellow-500' },
                     { label: 'Total Revenue', value: `₹${stats.revenue.toLocaleString()}`, icon: CreditCard, color: 'text-brand-red' },
                   ].map((stat, i) => (
-                    <div key={i} className="glass-card p-6 flex items-center justify-between">
+                    <div key={i} className="glass-card p-4 md:p-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
                       <div>
-                        <p className="text-gray-400 text-sm mb-1">{stat.label}</p>
-                        <h3 className="text-3xl font-bold">{stat.value}</h3>
+                        <p className="text-[10px] md:text-sm text-gray-400 mb-1 leading-tight">{stat.label}</p>
+                        <h3 className="text-xl md:text-3xl font-bold">{stat.value}</h3>
                       </div>
-                      <div className={`p-3 rounded-xl bg-black/5 dark:bg-white/5 ${stat.color}`}>
-                        <stat.icon size={24} />
+                      <div className={`p-2 md:p-3 rounded-xl bg-black/5 dark:bg-white/5 ${stat.color}`}>
+                        <stat.icon size={20} className="md:w-6 md:h-6" />
                       </div>
                     </div>
                   ))}
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                  <div className="glass-card p-6">
+                    <h3 className="text-lg font-bold mb-6">Revenue Trends</h3>
+                    <div className="h-64">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={chartData}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#333" />
+                          <XAxis dataKey="month" stroke="#666" />
+                          <YAxis stroke="#666" />
+                          <Tooltip contentStyle={{ backgroundColor: '#1a1a1a', border: 'none' }} />
+                          <Area type="monotone" dataKey="revenue" stroke="#e11d48" fill="#e11d48" fillOpacity={0.3} />
+                        </AreaChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                  <div className="glass-card p-6">
+                    <h3 className="text-lg font-bold mb-6">New Members</h3>
+                    <div className="h-64">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart data={chartData}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#333" />
+                          <XAxis dataKey="month" stroke="#666" />
+                          <YAxis stroke="#666" />
+                          <Tooltip contentStyle={{ backgroundColor: '#1a1a1a', border: 'none' }} />
+                          <Bar dataKey="newMembers" fill="#3b82f6" />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -1769,25 +1984,47 @@ function FitCityApp() {
                 className="space-y-6"
               >
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                  <div className="relative w-full sm:w-auto">
-                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
-                    <input 
-                      type="text" 
-                      placeholder="Search members..."
-                      value={searchTerm}
-                      onChange={(e) => setSearchTerm(e.target.value)}
-                      className="bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-lg pl-10 pr-4 py-2 w-full sm:w-80 focus:outline-none focus:border-brand-red transition-all"
+                  <div className="flex flex-wrap gap-4 w-full sm:w-auto">
+                    <div className="relative w-full sm:w-auto">
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
+                      <input 
+                        type="text" 
+                        placeholder="Search members..."
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        className="input-field w-full sm:w-64 pl-10"
+                      />
+                    </div>
+                    <PopupMenu 
+                      value={filterPlan} 
+                      onChange={setFilterPlan} 
+                      options={[{label: 'All Plans', value: 'All'}, ...PLANS.map(p => ({label: p.name, value: p.name}))]}
+                      className="w-48"
+                    />
+                    <PopupMenu 
+                      value={filterStatus} 
+                      onChange={setFilterStatus} 
+                      options={[{label: 'All Status', value: 'All'}, {label: 'Active', value: 'Active'}, {label: 'Expired', value: 'Expired'}]}
+                      className="w-48"
                     />
                   </div>
-                  <button 
-                    onClick={() => {
-                      setEditingMember(null);
-                      setIsAddModalOpen(true);
-                    }}
-                    className="btn-primary flex items-center gap-2 w-full sm:w-auto justify-center"
-                  >
-                    <Plus size={20} /> Add Member
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {selectedMembers.length > 0 && (
+                      <>
+                        <button onClick={handleBulkDelete} className="bg-red-500/10 text-red-500 px-4 py-2 rounded-lg text-sm font-bold">Delete ({selectedMembers.length})</button>
+                        <button onClick={() => handleBulkStatus('Active')} className="bg-brand-red/10 text-brand-red px-4 py-2 rounded-lg text-sm font-bold">Set Active</button>
+                      </>
+                    )}
+                    <button 
+                      onClick={() => {
+                        setEditingMember(null);
+                        setIsAddModalOpen(true);
+                      }}
+                      className="btn-primary flex items-center gap-2 w-full sm:w-auto justify-center"
+                    >
+                      <Plus size={20} /> Add Member
+                    </button>
+                  </div>
                 </div>
 
                 <div className="glass-card overflow-hidden">
@@ -1795,11 +2032,11 @@ function FitCityApp() {
                     <table className="w-full min-w-[800px] text-left">
                     <thead>
                       <tr className="border-b border-black/5 dark:border-white/5 bg-black/5 dark:bg-white/5">
+                        <th className="px-6 py-4"><input type="checkbox" onChange={(e) => setSelectedMembers(e.target.checked ? filteredMembers.map(m => m.id) : [])} checked={selectedMembers.length === filteredMembers.length && filteredMembers.length > 0} /></th>
                         <th className="px-6 py-4 text-sm font-semibold text-gray-500 dark:text-gray-400">Member</th>
                         <th className="px-6 py-4 text-sm font-semibold text-gray-500 dark:text-gray-400">Plan</th>
                         <th className="px-6 py-4 text-sm font-semibold text-gray-500 dark:text-gray-400">Join Date</th>
                         <th className="px-6 py-4 text-sm font-semibold text-gray-500 dark:text-gray-400">Expiry Date</th>
-                        <th className="px-6 py-4 text-sm font-semibold text-gray-500 dark:text-gray-400">Activity (14d)</th>
                         <th className="px-6 py-4 text-sm font-semibold text-gray-500 dark:text-gray-400">Status</th>
                         <th className="px-6 py-4 text-sm font-semibold text-gray-500 dark:text-gray-400">Actions</th>
                       </tr>
@@ -1807,18 +2044,20 @@ function FitCityApp() {
                     <tbody className="divide-y divide-black/5 dark:divide-white/5">
                       {filteredMembers.map((member) => (
                         <tr key={member.id} className="hover:bg-black/5 dark:hover:bg-white/5 transition-colors">
+                          <td className="px-6 py-4"><input type="checkbox" checked={selectedMembers.includes(member.id)} onChange={(e) => setSelectedMembers(e.target.checked ? [...selectedMembers, member.id] : selectedMembers.filter(id => id !== member.id))} /></td>
                           <td className="px-6 py-4">
                             <div 
                               className="flex items-center gap-3 cursor-pointer hover:opacity-80 transition-opacity"
                               onClick={() => setAttendanceModalMemberId(member.id)}
                             >
                               <div className="relative">
-                                <div className="w-8 h-8 rounded-full bg-brand-red/20 text-brand-red flex items-center justify-center text-xs font-bold">
-                                  {member.name[0]}
-                                </div>
-                                <div className={`absolute -bottom-1 -right-1 w-3 h-3 rounded-full border-2 border-white dark:border-black ${
-                                  member.attendance?.[new Date().toISOString().split('T')[0]] ? 'bg-green-500' : 'bg-red-500'
-                                }`}></div>
+                                {member.photoURL ? (
+                                  <img src={member.photoURL} alt={member.name} className="w-8 h-8 rounded-full object-cover" />
+                                ) : (
+                                  <div className="w-8 h-8 rounded-full bg-brand-red/20 text-brand-red flex items-center justify-center text-xs font-bold">
+                                    {member.name[0]}
+                                  </div>
+                                )}
                               </div>
                               <div>
                                 <div className="font-medium">{member.name}</div>
@@ -1829,29 +2068,6 @@ function FitCityApp() {
                           <td className="px-6 py-4 text-sm">{member.plan}</td>
                           <td className="px-6 py-4 text-sm text-gray-400">{member.joinDate}</td>
                           <td className="px-6 py-4 text-sm text-gray-400">{member.expiryDate}</td>
-                          <td className="px-6 py-4">
-                            <div className="flex items-center gap-1">
-                              {[...Array(14)].map((_, i) => {
-                                const d = new Date();
-                                d.setDate(d.getDate() - (13 - i));
-                                const dateStr = d.toISOString().split('T')[0];
-                                const isToday = i === 13;
-                                const isPresent = member.attendance?.[dateStr];
-                                
-                                return (
-                                  <div 
-                                    key={i}
-                                    title={dateStr}
-                                    className={`w-2 h-6 rounded-sm ${
-                                      isToday ? 'ring-1 ring-black/20 dark:ring-white/50' : ''
-                                    } ${
-                                      isPresent ? 'bg-green-500' : 'bg-black/5 dark:bg-white/10'
-                                    }`}
-                                  />
-                                );
-                              })}
-                            </div>
-                          </td>
                           <td className="px-6 py-4">
                             <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${
                               member.status === 'Active' ? 'bg-green-500/10 text-green-500' : 'bg-red-500/10 text-red-500'
@@ -1911,6 +2127,33 @@ function FitCityApp() {
                     </div>
                   </div>
                 ))}
+              </motion.div>
+            )}
+
+            {activeTab === 'requests' && (
+              <motion.div key="requests" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
+                <h2 className="text-2xl font-bold">New Member Requests</h2>
+                <div className="glass-card overflow-hidden">
+                  <table className="w-full text-left">
+                    <thead>
+                      <tr className="border-b border-black/5 dark:border-white/5 bg-black/5 dark:bg-white/5">
+                        <th className="px-6 py-4 text-sm font-semibold">Email</th>
+                        <th className="px-6 py-4 text-sm font-semibold">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-black/5 dark:divide-white/5">
+                      {pendingMembers.map((member) => (
+                        <tr key={member.id}>
+                          <td className="px-6 py-4">{member.email}</td>
+                          <td className="px-6 py-4 flex gap-2">
+                            <button onClick={() => handleApproveMember(member.id)} className="btn-primary py-1 px-3 text-sm">Confirm</button>
+                            <button onClick={() => handleDeclineMember(member.id)} className="bg-red-500/10 text-red-500 py-1 px-3 text-sm rounded-lg">Decline</button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </motion.div>
             )}
 
@@ -1999,9 +2242,13 @@ function FitCityApp() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <label className="text-xs font-bold text-gray-400 uppercase">Membership Plan</label>
-                    <select name="plan" defaultValue={editingMember?.plan} className="input-field w-full">
-                      {PLANS.map(p => <option key={p.name} value={p.name}>{p.name} - ₹{p.price}</option>)}
-                    </select>
+                    <input type="hidden" name="plan" value={editPlan} />
+                    <PopupMenu 
+                      value={editPlan} 
+                      onChange={setEditPlan} 
+                      options={PLANS.map(p => ({label: `${p.name} - ₹${p.price}`, value: p.name}))}
+                      className="w-full"
+                    />
                   </div>
                   <div className="space-y-2">
                     <label className="text-xs font-bold text-gray-400 uppercase">Expiry Date</label>
@@ -2009,8 +2256,40 @@ function FitCityApp() {
                   </div>
                 </div>
 
-                <button type="submit" className="btn-primary w-full py-4 text-lg mt-4">
-                  {editingMember ? 'Save Changes' : 'Register Member'}
+                <div className="space-y-2">
+                  <label className="text-xs font-bold text-gray-400 uppercase">Profile Photo</label>
+                  <div className="flex items-center gap-4">
+                    <div className="w-16 h-16 rounded-full bg-black/5 dark:bg-white/5 border border-dashed border-black/20 dark:border-white/20 flex items-center justify-center overflow-hidden">
+                      {selectedFile ? (
+                        <img src={URL.createObjectURL(selectedFile)} alt="Preview" className="w-full h-full object-cover" />
+                      ) : editingMember?.photoURL ? (
+                        <img src={editingMember.photoURL} alt="Photo" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                      ) : (
+                        <Plus size={24} className="text-gray-400" />
+                      )}
+                    </div>
+                    <input 
+                      type="file" 
+                      accept="image/*" 
+                      onChange={(e) => setSelectedFile(e.target.files?.[0] || null)} 
+                      className="text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-brand-red/10 file:text-brand-red hover:file:bg-brand-red/20" 
+                    />
+                  </div>
+                </div>
+                
+                <button 
+                  type="submit" 
+                  disabled={isRegistering}
+                  className="btn-primary w-full py-4 text-lg mt-4 flex items-center justify-center gap-2"
+                >
+                  {isRegistering ? (
+                    <>
+                      <div className="w-6 h-6 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      Processing...
+                    </>
+                  ) : (
+                    editingMember ? 'Save Changes' : 'Register Member'
+                  )}
                 </button>
               </form>
             </motion.div>
@@ -2050,10 +2329,14 @@ function FitCityApp() {
                 </button>
               </div>
               
-              <div className="px-8 pb-8">
-                <div className="relative flex justify-between items-end -mt-12 mb-6">
-                  <div className="w-24 h-24 rounded-full bg-gradient-to-br from-brand-red to-red-800 flex items-center justify-center text-4xl font-bold border-4 border-[#1a1a1a] shadow-xl">
-                    {(adminProfileData?.displayName?.[0] || user?.displayName?.[0] || 'A').toUpperCase()}
+              <div className="px-4 md:px-8 pb-8">
+                <div className="relative flex justify-between items-end -mt-8 md:-mt-12 mb-6">
+                  <div className="w-20 h-20 md:w-24 md:h-24 rounded-full bg-gradient-to-br from-brand-red to-red-800 flex items-center justify-center text-3xl md:text-4xl font-bold border-4 border-white dark:border-[#1a1a1a] shadow-xl overflow-hidden">
+                    {adminProfileData?.logoURL ? (
+                      <img src={adminProfileData.logoURL} alt="Logo" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                    ) : (
+                      (adminProfileData?.displayName?.[0] || user?.displayName?.[0] || 'A').toUpperCase()
+                    )}
                   </div>
                   {!isEditingAdminProfile ? (
                     <button 
@@ -2102,9 +2385,40 @@ function FitCityApp() {
                           className="input-field w-full" 
                         />
                       </div>
+                      <div className="space-y-2 md:col-span-2">
+                        <label className="text-xs font-bold text-gray-400 uppercase">Gym Logo</label>
+                        <div className="flex items-center gap-4">
+                          <div className="w-16 h-16 rounded-xl bg-black/5 dark:bg-white/5 border border-dashed border-black/20 dark:border-white/20 flex items-center justify-center overflow-hidden">
+                            {logoFile ? (
+                              <img src={URL.createObjectURL(logoFile)} alt="Preview" className="w-full h-full object-cover" />
+                            ) : adminProfileData?.logoURL ? (
+                              <img src={adminProfileData.logoURL} alt="Logo" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                            ) : (
+                              <Plus size={24} className="text-gray-400" />
+                            )}
+                          </div>
+                          <input 
+                            type="file" 
+                            accept="image/*" 
+                            onChange={(e) => setLogoFile(e.target.files?.[0] || null)}
+                            className="text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-brand-red/10 file:text-brand-red hover:file:bg-brand-red/20"
+                          />
+                        </div>
+                      </div>
                     </div>
-                    <button type="submit" className="btn-primary w-full py-3 font-bold">
-                      Save Changes
+                    <button 
+                      type="submit" 
+                      disabled={isSavingProfile}
+                      className="btn-primary w-full py-3 font-bold flex items-center justify-center gap-2"
+                    >
+                      {isSavingProfile ? (
+                        <>
+                          <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                          Saving...
+                        </>
+                      ) : (
+                        'Save Changes'
+                      )}
                     </button>
                   </form>
                 ) : (
@@ -2114,41 +2428,60 @@ function FitCityApp() {
                       <p className="text-brand-red font-medium">Head Administrator</p>
                     </div>
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-6">
                       <div className="space-y-4">
-                        <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider border-b border-black/5 dark:border-white/10 pb-2">Contact Info</h3>
+                        <h3 className="text-xs md:text-sm font-bold text-gray-400 uppercase tracking-wider border-b border-black/5 dark:border-white/10 pb-2">Contact Info</h3>
                         <div className="space-y-3">
-                          <div className="flex items-center gap-3 text-gray-600 dark:text-gray-300">
-                            <Mail size={16} className="text-brand-red" />
-                            <span>{user?.email || 'Info.fc@gmail.com'}</span>
+                          <div className="flex items-center gap-3 text-gray-600 dark:text-gray-300 text-sm">
+                            <Mail size={14} className="text-brand-red" />
+                            <span className="truncate">{user?.email || 'Info.fc@gmail.com'}</span>
                           </div>
-                          <div className="flex items-center gap-3 text-gray-600 dark:text-gray-300">
-                            <Phone size={16} className="text-brand-red" />
+                          <div className="flex items-center gap-3 text-gray-600 dark:text-gray-300 text-sm">
+                            <Phone size={14} className="text-brand-red" />
                             <span>{adminProfileData?.phone || '+91 9899832424'}</span>
                           </div>
-                          <div className="flex items-center gap-3 text-gray-600 dark:text-gray-300">
-                            <MapPin size={16} className="text-brand-red" />
+                          <div className="flex items-center gap-3 text-gray-600 dark:text-gray-300 text-sm">
+                            <MapPin size={14} className="text-brand-red" />
                             <span>{adminProfileData?.location || 'Jaipur, Rajasthan'}</span>
                           </div>
                         </div>
                       </div>
 
                       <div className="space-y-4">
-                        <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider border-b border-black/5 dark:border-white/10 pb-2">Gym Details</h3>
+                        <h3 className="text-xs md:text-sm font-bold text-gray-400 uppercase tracking-wider border-b border-black/5 dark:border-white/10 pb-2">Gym Details</h3>
                         <div className="space-y-3">
-                          <div className="flex items-center gap-3 text-gray-600 dark:text-gray-300">
-                            <LayoutDashboard size={16} className="text-brand-red" />
+                          <div className="flex items-center gap-3 text-gray-600 dark:text-gray-300 text-sm">
+                            <LayoutDashboard size={14} className="text-brand-red" />
                             <span>FitCity By Abhishek</span>
                           </div>
-                          <div className="flex items-center gap-3 text-gray-600 dark:text-gray-300">
-                            <Users size={16} className="text-brand-red" />
+                          <div className="flex items-center gap-3 text-gray-600 dark:text-gray-300 text-sm">
+                            <Users size={14} className="text-brand-red" />
                             <span>{members.length} Total Members</span>
                           </div>
-                          <div className="flex items-center gap-3 text-gray-600 dark:text-gray-300">
-                            <Clock size={16} className="text-brand-red" />
+                          <div className="flex items-center gap-3 text-gray-600 dark:text-gray-300 text-sm">
+                            <Clock size={14} className="text-brand-red" />
                             <span>Joined Jan 2024</span>
                           </div>
                         </div>
+                      </div>
+                    </div>
+
+                    <div className="pt-6 border-t border-black/5 dark:border-white/10">
+                      <h3 className="text-xs md:text-sm font-bold text-gray-400 uppercase tracking-wider mb-4">Preferences</h3>
+                      <div className="flex items-center justify-between p-4 rounded-xl bg-black/5 dark:bg-white/5 border border-black/5 dark:border-white/5">
+                        <div className="flex items-center gap-3">
+                          {isDarkMode ? <Moon size={20} className="text-brand-red" /> : <Sun size={20} className="text-brand-red" />}
+                          <div>
+                            <p className="text-sm font-bold">Dark Mode</p>
+                            <p className="text-xs text-gray-400">Toggle application theme</p>
+                          </div>
+                        </div>
+                        <button 
+                          onClick={() => setIsDarkMode(!isDarkMode)}
+                          className={`w-12 h-6 rounded-full p-1 transition-colors duration-300 ${isDarkMode ? 'bg-brand-red' : 'bg-gray-300'}`}
+                        >
+                          <div className={`w-4 h-4 rounded-full bg-white transition-transform duration-300 ${isDarkMode ? 'translate-x-6' : 'translate-x-0'}`} />
+                        </button>
                       </div>
                     </div>
 
@@ -2582,6 +2915,85 @@ function FitCityApp() {
                     )}
                   </div>
                 )}
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Member Profile Modal */}
+      <AnimatePresence>
+        {isMemberProfileModalOpen && memberProfile && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsMemberProfileModalOpen(false)}
+              className="absolute inset-0 bg-black/80 backdrop-blur-sm"
+            />
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="glass-card w-full max-w-md p-0 relative z-10 overflow-hidden"
+            >
+              <div className="h-24 bg-gradient-to-r from-brand-red to-red-900 relative">
+                <button 
+                  onClick={() => setIsMemberProfileModalOpen(false)} 
+                  className="absolute top-4 right-4 text-white/70 hover:text-white bg-black/20 hover:bg-black/40 p-2 rounded-full backdrop-blur-md transition-all"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+              
+              <div className="px-6 pb-8">
+                <div className="relative flex justify-center -mt-10 mb-6">
+                  <div className="w-20 h-20 rounded-full bg-gradient-to-br from-brand-red to-red-800 flex items-center justify-center text-3xl font-bold border-4 border-white dark:border-[#1a1a1a] shadow-xl overflow-hidden">
+                    {memberProfile.name[0]}
+                  </div>
+                </div>
+
+                <div className="text-center space-y-1 mb-8">
+                  <h2 className="text-2xl font-bold">{memberProfile.name}</h2>
+                  <p className="text-brand-red font-medium">{memberProfile.plan} Member</p>
+                  <p className="text-sm text-gray-500">{memberProfile.email}</p>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between p-4 rounded-xl bg-black/5 dark:bg-white/5 border border-black/5 dark:border-white/5">
+                    <div className="flex items-center gap-3">
+                      <Phone size={18} className="text-brand-red" />
+                      <span className="text-sm font-medium">{memberProfile.phone}</span>
+                    </div>
+                  </div>
+                  
+                  <div className="pt-4 border-t border-black/5 dark:border-white/10">
+                    <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4">Preferences</h3>
+                    <div className="flex items-center justify-between p-4 rounded-xl bg-black/5 dark:bg-white/5 border border-black/5 dark:border-white/5">
+                      <div className="flex items-center gap-3">
+                        {isDarkMode ? <Moon size={20} className="text-brand-red" /> : <Sun size={20} className="text-brand-red" />}
+                        <div>
+                          <p className="text-sm font-bold">Dark Mode</p>
+                          <p className="text-xs text-gray-400">Toggle application theme</p>
+                        </div>
+                      </div>
+                      <button 
+                        onClick={() => setIsDarkMode(!isDarkMode)}
+                        className={`w-12 h-6 rounded-full p-1 transition-colors duration-300 ${isDarkMode ? 'bg-brand-red' : 'bg-gray-300'}`}
+                      >
+                        <div className={`w-4 h-4 rounded-full bg-white transition-transform duration-300 ${isDarkMode ? 'translate-x-6' : 'translate-x-0'}`} />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                <button 
+                  onClick={handleLogout}
+                  className="w-full mt-8 py-3 rounded-xl border border-red-500/20 text-red-500 font-bold hover:bg-red-500/10 transition-all flex items-center justify-center gap-2"
+                >
+                  <LogOut size={18} /> Log Out
+                </button>
               </div>
             </motion.div>
           </div>
