@@ -152,6 +152,23 @@ class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   }
 }
 
+const ConfirmationModal = ({ isOpen, title, message, onConfirm, onCancel }: { isOpen: boolean, title: string, message: string, onConfirm: () => void, onCancel: () => void }) => {
+  if (!isOpen) return null;
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" onClick={onCancel} />
+      <div className="glass-card w-full max-w-sm p-6 relative z-10 space-y-4">
+        <h3 className="text-lg font-bold">{title}</h3>
+        <p className="text-gray-400 text-sm">{message}</p>
+        <div className="flex gap-4">
+          <button onClick={onCancel} className="flex-1 px-4 py-2 rounded-xl border border-black/10 dark:border-white/10 hover:bg-black/5 dark:hover:bg-white/5 transition-colors font-bold">Cancel</button>
+          <button onClick={onConfirm} className="flex-1 bg-red-500 hover:bg-red-600 text-white py-2 rounded-xl font-bold">Confirm</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export default function App() {
   return (
     <ErrorBoundary>
@@ -231,13 +248,14 @@ function FitCityApp() {
   
   // Admin specific state
   const [logs, setLogs] = useState<any[]>([]);
+  const [admins, setAdmins] = useState<any[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [isAddAnnouncementModalOpen, setIsAddAnnouncementModalOpen] = useState(false);
   const [isEditingAdminProfile, setIsEditingAdminProfile] = useState(false);
   const [adminProfileData, setAdminProfileData] = useState<any>(null);
   const [logoFile, setLogoFile] = useState<File | null>(null);
 
-  const isAdmin = userRole === 'admin' || (user && (user.email === 'hemants.shekhawat18@gmail.com' || user.email === 'info.fc@gmail.com' || user.email === 'Info.fc@gmail.com'));
+  const isAdmin = userRole === 'admin' || (user && (user.email === 'hemants.shekhawat18@gmail.com' || user.email === 'info.fc@gmail.com' || user.email === 'Info.fc@gmail.com' || user.email === 'info.fcgym@gmail.com'));
 
   const chartData = React.useMemo(() => {
     const revenueByMonth: Record<string, number> = {};
@@ -287,7 +305,7 @@ function FitCityApp() {
           setUserRole(userDoc.data().role);
         } else {
           // If hardcoded admin, bootstrap the user document
-          const hardcodedAdmins = ['hemants.shekhawat18@gmail.com', 'info.fc@gmail.com', 'Info.fc@gmail.com'];
+          const hardcodedAdmins = ['hemants.shekhawat18@gmail.com', 'info.fc@gmail.com', 'Info.fc@gmail.com', 'info.fcgym@gmail.com'];
           if (hardcodedAdmins.includes(currentUser.email || '')) {
             await setDoc(doc(db, 'users', currentUser.uid), {
               uid: currentUser.uid,
@@ -348,6 +366,24 @@ function FitCityApp() {
       setLogs(logsList);
     }, (error) => {
       handleFirestoreError(error, OperationType.LIST, 'logs');
+    });
+
+    return () => unsubscribe();
+  }, [isAuthReady, user, isAdmin]);
+
+  // Admin: Fetch admins
+  useEffect(() => {
+    if (!isAuthReady || !user || !isAdmin) return;
+
+    const q = query(collection(db, 'users'), where('role', '==', 'admin'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const adminsList: any[] = [];
+      snapshot.forEach((doc) => {
+        adminsList.push({ id: doc.id, ...doc.data() });
+      });
+      setAdmins(adminsList);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'users');
     });
 
     return () => unsubscribe();
@@ -715,6 +751,14 @@ function FitCityApp() {
     }
   };
 
+  const handleRoleChange = async (uid: string, newRole: string) => {
+    try {
+      await updateDoc(doc(db, 'users', uid), { role: newRole });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.UPDATE, `users/${uid}`);
+    }
+  };
+
   const handleBulkDelete = async () => {
     for (const id of selectedMembers) {
       await deleteDoc(doc(db, 'members', id));
@@ -762,6 +806,7 @@ function FitCityApp() {
   };
 
   const [isRegistering, setIsRegistering] = useState(false);
+  const [confirmationModal, setConfirmationModal] = useState<{ isOpen: boolean, title: string, message: string, onConfirm: () => void } | null>(null);
 
   const handleAddMember = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -1054,130 +1099,184 @@ function FitCityApp() {
 
   if (!isLoggedIn) {
     return (
-      <div className="min-h-screen bg-white dark:bg-black text-black dark:text-white flex items-center justify-center p-4 font-sans selection:bg-brand-red/30">
-        <div className="absolute inset-0 overflow-hidden pointer-events-none">
-          <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-brand-red/20 rounded-full blur-[120px] animate-pulse"></div>
-          <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-red-900/20 rounded-full blur-[120px] animate-pulse" style={{ animationDelay: '1s' }}></div>
+      <div className="min-h-screen relative overflow-hidden bg-gradient-to-br from-[#7A88D9] via-[#5B68C0] to-[#2B3284] flex flex-col font-sans">
+        {/* Background Abstract Shapes */}
+        <div className="absolute top-[-5%] left-[-10%] w-[40%] h-[30%] bg-[#2B3284] rounded-full mix-blend-multiply filter blur-3xl opacity-60 animate-pulse"></div>
+        <div className="absolute top-[10%] right-[-10%] w-[40%] h-[40%] bg-[#A5B4FC] rounded-full mix-blend-multiply filter blur-3xl opacity-60 animate-pulse" style={{ animationDelay: '2s' }}></div>
+        <div className="absolute bottom-[-20%] left-[10%] w-[50%] h-[50%] bg-[#4338CA] rounded-full mix-blend-multiply filter blur-3xl opacity-60 animate-pulse" style={{ animationDelay: '4s' }}></div>
+        
+        {/* 3D Spheres */}
+        <div className="absolute top-[5%] left-[5%] w-24 h-24 rounded-full bg-gradient-to-br from-[#1E2565] to-[#3B4699] shadow-[inset_-5px_-5px_15px_rgba(0,0,0,0.5),5px_5px_15px_rgba(0,0,0,0.3)] backdrop-blur-sm"></div>
+        <div className="absolute top-[20%] right-[10%] w-32 h-32 rounded-full bg-gradient-to-br from-[#ffffff] to-[#818CF8] shadow-[inset_-10px_-10px_20px_rgba(0,0,0,0.2),10px_10px_20px_rgba(0,0,0,0.2)] backdrop-blur-sm"></div>
+        <div className="absolute top-[60%] left-[10%] w-16 h-16 rounded-full bg-gradient-to-br from-[#ffffff] to-[#818CF8] shadow-[inset_-5px_-5px_10px_rgba(0,0,0,0.2),5px_5px_10px_rgba(0,0,0,0.2)] backdrop-blur-sm"></div>
+        <div className="absolute bottom-[20%] left-[20%] w-40 h-40 rounded-full bg-gradient-to-br from-[#1E2565] to-[#3B4699] shadow-[inset_-10px_-10px_20px_rgba(0,0,0,0.5),10px_10px_20px_rgba(0,0,0,0.3)] backdrop-blur-sm"></div>
+
+        {/* Back Button */}
+        <div className="absolute top-12 left-6 z-20">
+          <button onClick={() => window.history.back()} className="flex items-center text-white text-sm font-medium hover:opacity-80 transition-opacity bg-white/10 px-3 py-2 rounded-xl backdrop-blur-md border border-white/20">
+            <ChevronLeft size={20} className="mr-1" /> Back
+          </button>
         </div>
 
-        <motion.div 
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="glass-card w-full max-w-md p-8 relative z-10"
-        >
-          <div className="flex flex-col items-center mb-8">
-            <div className="w-16 h-16 bg-brand-red rounded-2xl flex items-center justify-center mb-4 shadow-lg shadow-brand-red/20">
-              <Activity size={32} className="text-white" />
-            </div>
-            <h1 className="text-3xl font-bold tracking-tight">FitCity</h1>
-            <p className="text-gray-500 text-sm mt-1">{loginMode === 'admin' ? 'Admin' : 'Member'} {authMode === 'login' ? 'Login' : 'Sign Up'}</p>
-          </div>
-
-          <div className="flex gap-2 mb-6">
-            <button
-              onClick={() => setLoginMode('member')}
-              className={`flex-1 py-2 rounded-xl text-sm font-bold transition-all ${loginMode === 'member' ? 'bg-brand-red text-white' : 'bg-black/5 dark:bg-white/5 text-gray-500'}`}
-            >
-              Member
-            </button>
-            <button
-              onClick={() => setLoginMode('admin')}
-              className={`flex-1 py-2 rounded-xl text-sm font-bold transition-all ${loginMode === 'admin' ? 'bg-brand-red text-white' : 'bg-black/5 dark:bg-white/5 text-gray-500'}`}
-            >
-              Admin
-            </button>
-          </div>
-          <div className="flex gap-2 mb-6">
-            <button
-              onClick={() => setAuthMode('login')}
-              className={`flex-1 py-2 rounded-xl text-sm font-bold transition-all ${authMode === 'login' ? 'bg-brand-red text-white' : 'bg-black/5 dark:bg-white/5 text-gray-500'}`}
-            >
-              Login
-            </button>
-            <button
-              onClick={() => setAuthMode('signup')}
-              className={`flex-1 py-2 rounded-xl text-sm font-bold transition-all ${authMode === 'signup' ? 'bg-brand-red text-white' : 'bg-black/5 dark:bg-white/5 text-gray-500'}`}
-            >
-              Sign Up
-            </button>
-          </div>
-
-          <form onSubmit={authMode === 'login' ? handleLogin : handleSignUp} className="space-y-6">
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-gray-400">Email Address</label>
-              <div className="relative">
-                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
-                <input 
-                  name="email"
-                  type="email" 
-                  required
-                  placeholder="admin@example.com"
-                  className="w-full bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-xl pl-10 pr-4 py-3 focus:outline-none focus:border-brand-red transition-all"
-                />
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-gray-400">Password</label>
-              <div className="relative">
-                <Clock className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" size={18} />
-                <input 
-                  name="password"
-                  type="password" 
-                  required
-                  placeholder="••••••••"
-                  className="w-full bg-black/5 dark:bg-white/5 border border-black/10 dark:border-white/10 rounded-xl pl-10 pr-4 py-3 focus:outline-none focus:border-brand-red transition-all"
-                />
-              </div>
-            </div>
-
-            {loginError && (
-              <motion.p 
-                initial={{ opacity: 0, x: -10 }}
-                animate={{ opacity: 1, x: 0 }}
-                className="text-red-500 text-sm font-medium"
+        {/* Form Card */}
+        <div className="flex-1 flex flex-col justify-end z-10 mt-32">
+          <motion.div 
+            initial={{ y: '100%' }}
+            animate={{ y: 0 }}
+            transition={{ type: 'spring', damping: 25, stiffness: 200 }}
+            className="bg-white/95 backdrop-blur-2xl rounded-t-[40px] w-full max-w-md mx-auto p-8 pt-10 pb-12 shadow-[0_-10px_40px_rgba(0,0,0,0.15)] relative border-t border-white/50"
+          >
+            <div className="w-12 h-1.5 bg-gray-200 rounded-full mx-auto mb-8"></div>
+            
+            <h2 className="text-3xl font-bold text-center text-[#2B3284] mb-8 tracking-tight">
+              {authMode === 'login' ? 'Welcome back' : 'Get Started'}
+            </h2>
+            
+            {/* Role Toggle (Admin/Member) */}
+            <div className="flex justify-center gap-6 mb-8">
+              <button
+                type="button"
+                onClick={() => setLoginMode('member')}
+                className={`text-sm font-bold uppercase tracking-wider pb-2 border-b-2 transition-all ${loginMode === 'member' ? 'border-[#4F46E5] text-[#4F46E5]' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
               >
-                {loginError}
-              </motion.p>
-            )}
-
-            <button 
-              type="submit"
-              className="w-full btn-primary py-4 text-lg font-bold shadow-xl shadow-brand-red/20"
-            >
-              Sign In
-            </button>
-
-            <div className="relative my-8">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-black/10 dark:border-white/10"></div>
-              </div>
-              <div className="relative flex justify-center text-xs uppercase">
-                <span className="bg-white dark:bg-[#1a1a1a] px-2 text-gray-500">Or continue with</span>
-              </div>
+                Member
+              </button>
+              <button
+                type="button"
+                onClick={() => setLoginMode('admin')}
+                className={`text-sm font-bold uppercase tracking-wider pb-2 border-b-2 transition-all ${loginMode === 'admin' ? 'border-[#4F46E5] text-[#4F46E5]' : 'border-transparent text-gray-400 hover:text-gray-600'}`}
+              >
+                Admin
+              </button>
             </div>
 
-            <button 
-              type="button"
-              onClick={handleGoogleLogin}
-              className="w-full bg-gray-100 dark:bg-white text-black py-4 rounded-xl font-bold flex items-center justify-center gap-3 hover:bg-gray-200 transition-all shadow-lg active:scale-[0.98]"
-            >
-              <svg className="w-5 h-5" viewBox="0 0 24 24">
-                <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-                <path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-                <path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" />
-                <path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-              </svg>
-              Sign in with Google
-            </button>
-          </form>
+            <form onSubmit={authMode === 'login' ? handleLogin : handleSignUp} className="space-y-5">
+              {authMode === 'signup' && (
+                <div className="space-y-1.5">
+                  <label className="text-xs font-semibold text-gray-500 ml-1 uppercase tracking-wide">Full Name</label>
+                  <div className="relative">
+                    <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-gray-400">
+                      <UserIcon size={18} />
+                    </div>
+                    <input 
+                      name="name"
+                      type="text" 
+                      required
+                      placeholder="Enter Full Name"
+                      className="w-full bg-gray-50/50 border border-gray-200 rounded-2xl pl-11 pr-4 py-3.5 text-sm focus:outline-none focus:border-[#4F46E5] focus:ring-1 focus:ring-[#4F46E5] transition-all text-gray-900 placeholder-gray-400"
+                    />
+                  </div>
+                </div>
+              )}
 
-          <div className="mt-8 pt-6 border-t border-black/5 dark:border-white/5 text-center">
-            <p className="text-xs text-gray-600">
-              Authorized Personnel Only. Access is monitored.
-            </p>
-          </div>
-        </motion.div>
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-gray-500 ml-1 uppercase tracking-wide">Email</label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-gray-400">
+                    <Mail size={18} />
+                  </div>
+                  <input 
+                    name="email"
+                    type="email" 
+                    required
+                    placeholder="kristin.watson@example.com"
+                    className="w-full bg-gray-50/50 border border-gray-200 rounded-2xl pl-11 pr-4 py-3.5 text-sm focus:outline-none focus:border-[#4F46E5] focus:ring-1 focus:ring-[#4F46E5] transition-all text-gray-900 placeholder-gray-400"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-semibold text-gray-500 ml-1 uppercase tracking-wide">Password</label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-gray-400">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+                  </div>
+                  <input 
+                    name="password"
+                    type="password" 
+                    required
+                    placeholder="••••••••••••"
+                    className="w-full bg-gray-50/50 border border-gray-200 rounded-2xl pl-11 pr-4 py-3.5 text-sm focus:outline-none focus:border-[#4F46E5] focus:ring-1 focus:ring-[#4F46E5] transition-all text-gray-900 placeholder-gray-400"
+                  />
+                </div>
+              </div>
+
+              {authMode === 'login' ? (
+                <div className="flex items-center justify-between text-xs mt-2 px-1">
+                  <label className="flex items-center gap-2 cursor-pointer group">
+                    <input type="checkbox" className="rounded text-[#4F46E5] focus:ring-[#4F46E5] w-4 h-4 border-gray-300 transition-colors cursor-pointer" />
+                    <span className="text-gray-500 group-hover:text-gray-700 transition-colors">Remember me</span>
+                  </label>
+                  <a href="#" className="text-[#4F46E5] font-semibold hover:text-[#3B4699] transition-colors">Forgot password?</a>
+                </div>
+              ) : (
+                <div className="flex items-start gap-2 text-xs mt-2 px-1">
+                  <label className="flex items-start gap-2 cursor-pointer group mt-0.5">
+                    <input type="checkbox" required className="rounded text-[#4F46E5] focus:ring-[#4F46E5] w-4 h-4 border-gray-300 transition-colors cursor-pointer mt-0.5" />
+                    <span className="text-gray-500 leading-relaxed group-hover:text-gray-700 transition-colors">I agree to the processing of <span className="text-[#4F46E5] font-semibold">Personal data</span></span>
+                  </label>
+                </div>
+              )}
+
+              {loginError && (
+                <motion.p 
+                  initial={{ opacity: 0, y: -10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="text-red-500 text-sm font-medium text-center bg-red-50 py-2 rounded-xl border border-red-100"
+                >
+                  {loginError}
+                </motion.p>
+              )}
+
+              <button 
+                type="submit"
+                className="w-full bg-gradient-to-r from-[#4F46E5] to-[#3B4699] text-white rounded-2xl py-4 font-bold text-sm shadow-[0_8px_20px_rgba(79,70,229,0.3)] hover:shadow-[0_8px_25px_rgba(79,70,229,0.4)] hover:-translate-y-0.5 transition-all mt-6"
+              >
+                {authMode === 'login' ? 'Sign in' : 'Sign up'}
+              </button>
+
+              <div className="relative my-8">
+                <div className="absolute inset-0 flex items-center">
+                  <div className="w-full border-t border-gray-200"></div>
+                </div>
+                <div className="relative flex justify-center text-xs">
+                  <span className="bg-white px-4 text-gray-400 uppercase tracking-wider font-medium">Or continue with</span>
+                </div>
+              </div>
+
+              <div className="flex justify-center gap-5">
+                <button type="button" className="w-12 h-12 rounded-full bg-white border border-gray-200 shadow-sm flex items-center justify-center text-[#1877F2] hover:bg-gray-50 hover:scale-105 transition-all">
+                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M22 12c0-5.523-4.477-10-10-10S2 6.477 2 12c0 4.991 3.657 9.128 8.438 9.878v-6.987h-2.54V12h2.54V9.797c0-2.506 1.492-3.89 3.777-3.89 1.094 0 2.238.195 2.238.195v2.46h-1.26c-1.243 0-1.63.771-1.63 1.562V12h2.773l-.443 2.89h-2.33v6.988C18.343 21.128 22 16.991 22 12z" /></svg>
+                </button>
+                <button type="button" onClick={handleGoogleLogin} className="w-12 h-12 rounded-full bg-white border border-gray-200 shadow-sm flex items-center justify-center hover:bg-gray-50 hover:scale-105 transition-all">
+                  <svg className="w-5 h-5" viewBox="0 0 24 24">
+                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" />
+                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+                  </svg>
+                </button>
+                <button type="button" className="w-12 h-12 rounded-full bg-white border border-gray-200 shadow-sm flex items-center justify-center text-black hover:bg-gray-50 hover:scale-105 transition-all">
+                  <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.59 9.05 7.31c1.35.07 2.29.74 3.08.8 1.18-.04 2.26-.79 3.59-.79 1.56.04 2.87.68 3.58 1.74-3.05 1.72-2.54 5.98.42 7.15-.68 1.65-1.55 3.12-2.67 4.07zM12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25z" /></svg>
+                </button>
+              </div>
+
+              <div className="text-center text-sm text-gray-500 mt-8">
+                {authMode === 'login' ? (
+                  <>Don't have an account? <button type="button" onClick={() => setAuthMode('signup')} className="text-[#4F46E5] font-bold hover:underline ml-1">Sign up</button></>
+                ) : (
+                  <>Already have an account? <button type="button" onClick={() => setAuthMode('login')} className="text-[#4F46E5] font-bold hover:underline ml-1">Sign in</button></>
+                )}
+              </div>
+              
+              <div className="text-center mt-6">
+                <p className="text-[10px] text-gray-400 leading-relaxed">
+                  By continuing, you agree to FitCity's <a href="#" className="underline hover:text-gray-600">Terms of Service</a> and <a href="#" className="underline hover:text-gray-600">Privacy Policy</a>.
+                </p>
+              </div>
+            </form>
+          </motion.div>
+        </div>
       </div>
     );
   }
@@ -1379,6 +1478,45 @@ function FitCityApp() {
                     </div>
 
                     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                      {/* Latest Announcement */}
+                      {announcements.length > 0 && (
+                        <motion.div 
+                          initial={{ opacity: 0, x: -20 }}
+                          animate={{ opacity: 1, x: 0 }}
+                          className="lg:col-span-3 glass-card p-6 border-brand-red/20 bg-brand-red/5 relative overflow-hidden group"
+                        >
+                          <div className="absolute top-0 right-0 p-8 opacity-5 group-hover:opacity-10 transition-opacity">
+                            <Megaphone size={120} className="-rotate-12" />
+                          </div>
+                          <div className="relative z-10">
+                            <div className="flex items-center justify-between mb-4">
+                              <div className="flex items-center gap-3">
+                                <div className="p-2 rounded-lg bg-brand-red/20 text-brand-red">
+                                  <Megaphone size={20} />
+                                </div>
+                                <h2 className="text-xl font-bold">Latest Announcement</h2>
+                              </div>
+                              <button 
+                                onClick={() => setActiveTab('announcements')}
+                                className="text-brand-red text-sm font-bold hover:underline flex items-center gap-1"
+                              >
+                                View All <ChevronRight size={14} />
+                              </button>
+                            </div>
+                            <div className="space-y-2 max-w-3xl">
+                              <h3 className="font-bold text-lg text-brand-red">{announcements[0].title}</h3>
+                              <p className="text-gray-600 dark:text-gray-300 text-sm line-clamp-2 leading-relaxed">
+                                {announcements[0].content}
+                              </p>
+                              <div className="flex items-center gap-4 mt-4 text-[10px] text-gray-500 uppercase tracking-widest font-bold">
+                                <span className="flex items-center gap-1"><Calendar size={10} /> {new Date(announcements[0].date).toLocaleDateString()}</span>
+                                <span className="flex items-center gap-1"><Clock size={10} /> {new Date(announcements[0].date).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                              </div>
+                            </div>
+                          </div>
+                        </motion.div>
+                      )}
+
                       {/* Today's Workout */}
                       <div className="lg:col-span-2 glass-card p-6">
                         <div className="flex items-center justify-between mb-6">
@@ -1784,6 +1922,15 @@ function FitCityApp() {
             </div>
           )}
         </AnimatePresence>
+        
+        {/* Confirmation Modal */}
+        <ConfirmationModal 
+          isOpen={!!confirmationModal}
+          title={confirmationModal?.title || ''}
+          message={confirmationModal?.message || ''}
+          onConfirm={() => confirmationModal?.onConfirm()}
+          onCancel={() => setConfirmationModal(null)}
+        />
       </div>
     );
   }
@@ -1820,6 +1967,7 @@ function FitCityApp() {
             { id: 'schedule', icon: Calendar, label: 'Schedule' },
             { id: 'plans', icon: CreditCard, label: 'Plans' },
             { id: 'announcements', icon: Megaphone, label: 'Announcements' },
+            ...(isAdmin ? [{ id: 'admins', icon: Users, label: 'Admins' }] : []),
           ].map((item) => (
             <button
               key={item.id}
@@ -1858,6 +2006,7 @@ function FitCityApp() {
           { id: 'announcements', icon: Megaphone, label: 'Announce' },
           { id: 'schedule', icon: Calendar, label: 'Schedule' },
           { id: 'plans', icon: CreditCard, label: 'Plans' },
+          ...(isAdmin ? [{ id: 'admins', icon: Users, label: 'Admins' }] : []),
         ].map((item) => (
           <button
             key={item.id}
@@ -2105,8 +2254,17 @@ function FitCityApp() {
                     </div>
                     <div className="pt-4 border-t border-black/5 dark:border-white/5">
                       <div className="bg-brand-red/10 border border-brand-red/20 rounded-xl p-4">
-                        <p className="text-xs text-brand-red font-bold uppercase tracking-wider mb-2">Announcement</p>
-                        <p className="text-sm text-gray-300">New Functional Training batch starting this Monday at 7 AM!</p>
+                        <p className="text-xs text-brand-red font-bold uppercase tracking-wider mb-2">Latest Announcement</p>
+                        <p className="text-sm text-gray-300">
+                          {announcements.length > 0 
+                            ? announcements[0].title 
+                            : 'No announcements yet.'}
+                        </p>
+                        {announcements.length > 0 && (
+                          <p className="text-xs text-gray-500 mt-2 line-clamp-2 italic">
+                            {announcements[0].content}
+                          </p>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -2216,15 +2374,43 @@ function FitCityApp() {
                             </span>
                           </td>
                           <td className="px-6 py-4">
-                            <button 
-                              onClick={() => {
-                                setEditingMember(member);
-                                setIsAddModalOpen(true);
-                              }}
-                              className={`${member.status === 'Pending' ? 'text-orange-500 hover:text-orange-600' : 'text-gray-400 hover:text-black dark:hover:text-white'} transition-colors font-medium`}
-                            >
-                              {member.status === 'Pending' ? 'Approve' : 'Edit'}
-                            </button>
+                            <div className="flex items-center gap-2">
+                              <button 
+                                onClick={() => {
+                                  setEditingMember(member);
+                                  setIsAddModalOpen(true);
+                                }}
+                                className={`${member.status === 'Pending' ? 'text-orange-500 hover:text-orange-600' : 'text-gray-400 hover:text-black dark:hover:text-white'} transition-colors font-medium`}
+                              >
+                                {member.status === 'Pending' ? 'Approve' : 'Edit'}
+                              </button>
+                              {isAdmin && (
+                                <>
+                                  <button 
+                                    onClick={() => setConfirmationModal({
+                                      isOpen: true,
+                                      title: 'Delete Member',
+                                      message: `Are you sure you want to delete ${member.name}?`,
+                                      onConfirm: async () => {
+                                        await deleteDoc(doc(db, 'members', member.id));
+                                        setConfirmationModal(null);
+                                      }
+                                    })}
+                                    className="text-red-500 hover:text-red-600"
+                                  >
+                                    Delete
+                                  </button>
+                                  <select 
+                                    value={member.role || 'member'}
+                                    onChange={(e) => handleRoleChange(member.uid, e.target.value)}
+                                    className="bg-transparent text-xs text-gray-500"
+                                  >
+                                    <option value="member">Member</option>
+                                    <option value="admin">Admin</option>
+                                  </select>
+                                </>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       ))}
@@ -2314,6 +2500,30 @@ function FitCityApp() {
                           </tr>
                         ))
                       )}
+                    </tbody>
+                  </table>
+                </div>
+              </motion.div>
+            )}
+
+            {activeTab === 'admins' && (
+              <motion.div key="admins" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
+                <h2 className="text-2xl font-bold">Admin List</h2>
+                <div className="glass-card overflow-hidden">
+                  <table className="w-full text-left">
+                    <thead>
+                      <tr className="border-b border-black/5 dark:border-white/5 bg-black/5 dark:bg-white/5">
+                        <th className="px-6 py-4 text-sm font-semibold">Name</th>
+                        <th className="px-6 py-4 text-sm font-semibold">Email</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-black/5 dark:divide-white/5">
+                      {admins.map((admin) => (
+                        <tr key={admin.id}>
+                          <td className="px-6 py-4 font-medium">{admin.displayName || 'Admin'}</td>
+                          <td className="px-6 py-4 text-gray-500">{admin.email}</td>
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
                 </div>

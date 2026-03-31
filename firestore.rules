@@ -45,7 +45,7 @@ service cloud.firestore {
     function isAdmin() {
       return isAuthenticated() &&
         (
-          ((request.auth.token.email == "hemants.shekhawat18@gmail.com" || request.auth.token.email == "info.fc@gmail.com" || request.auth.token.email == "Info.fc@gmail.com") && request.auth.token.email_verified == true) ||
+          ((request.auth.token.email == "hemants.shekhawat18@gmail.com" || request.auth.token.email == "info.fc@gmail.com" || request.auth.token.email == "Info.fc@gmail.com" || request.auth.token.email == "info.fcgym@gmail.com") && request.auth.token.email_verified == true) ||
           (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin')
         );
     }
@@ -94,13 +94,16 @@ service cloud.firestore {
 
     function isValidUser(data) {
       let requiredFields = ['uid', 'email', 'role'];
-      let allowedFields = ['uid', 'email', 'role', 'displayName', 'phone', 'location', 'photoURL'];
+      let allowedFields = ['uid', 'email', 'role', 'displayName', 'phone', 'location', 'photoURL', 'createdAt', 'updatedAt'];
       
       return hasRequiredFields(requiredFields) &&
              hasOnlyAllowedFields(allowedFields) &&
-             data.uid is string && data.uid == request.auth.uid &&
+             data.uid is string && (data.uid == request.auth.uid || isAdmin()) &&
              isValidEmail(data.email) &&
              data.role in ['admin', 'staff'] &&
+             (!('displayName' in data) || (data.displayName is string && data.displayName.size() < 100)) &&
+             (!('phone' in data) || (data.phone is string && data.phone.size() < 20)) &&
+             (!('location' in data) || (data.location is string && data.location.size() < 200)) &&
              (!('photoURL' in data) || data.photoURL is string);
     }
 
